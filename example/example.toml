@@ -1,0 +1,179 @@
+
+hostname = "judge"
+
+[process]
+    env = [
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/test",
+		"TERM=xterm"
+    ]
+
+    cwd = "/"
+
+    no_new_privileges = true
+
+    [process.user]
+    uid = 0
+    gid = 0
+
+    [process.capabilities]
+    bounding = [
+		"CAP_AUDIT_WRITE",
+		"CAP_KILL",
+	]
+
+    effective = [
+		"CAP_AUDIT_WRITE",
+		"CAP_KILL",
+	]
+
+    inheritable = [
+		"CAP_AUDIT_WRITE",
+		"CAP_KILL",
+	]
+
+    permitted = [
+		"CAP_AUDIT_WRITE",
+		"CAP_KILL",
+	]
+
+    ambient = [
+		"CAP_AUDIT_WRITE",
+		"CAP_KILL",
+	]
+
+    [[process.rlimits]]
+    type = "RLIMIT_CPU"
+    hard = 1
+    soft = 1
+
+    [[process.rlimits]]
+    type = "RLIMIT_FSIZE"
+    hard = 134217728 # 128M
+    soft = 134217728 # 128M
+
+    [[process.rlimits]]
+    type = "RLIMIT_NPROC"
+    hard = 10000
+    soft = 10000
+
+    [[process.rlimits]]
+    type = "RLIMIT_CORE"
+    hard = 0
+    soft = 0
+
+[[mounts]]
+destination = "/proc"
+type = "proc"
+source = "proc"
+
+[[mounts]]
+destination = "/dev"
+type = "tmpfs"
+source = "tmpfs"
+options = [
+    "nosuid",
+    "strictatime",
+    "mode=755",
+    "size=65536k"
+]
+
+[[mounts]]
+destination = "/dev/pts"
+type = "devpts"
+source = "devpts"
+options = [
+    "nosuid",
+    "noexec",
+    "newinstance",
+    "ptmxmode=0666",
+    "mode=0620"
+]
+
+[[mounts]]
+destination = "/dev/shm"
+type = "tmpfs"
+source = "shm"
+options = [
+    "nosuid",
+    "noexec",
+    "nodev",
+    "mode=1777",
+    "size=65536k"
+]
+
+[[mounts]]
+destination = "/dev/mqueue"
+type = "mqueue"
+source = "mqueue"
+options = [
+    "nosuid",
+    "noexec",
+    "nodev"
+]
+
+[[mounts]]
+destination = "/sys"
+type = "none"
+source = "/sys"
+options = [
+    "rbind",
+    "nosuid",
+    "noexec",
+    "nodev",
+    "ro"
+]
+
+[root]
+path = "/home/huangyuhui/runctest/rootfs"
+readonly = true
+
+[linux]
+    maskedPaths = [
+        "/proc/acpi",
+        "/proc/asound",
+        "/proc/kcore",
+        "/proc/keys",
+        "/proc/latency_stats",
+        "/proc/timer_list",
+        "/proc/timer_stats",
+        "/proc/sched_debug",
+        "/sys/firmware",
+        "/proc/scsi",
+    ]
+    readonlyPaths = [
+        "/proc/bus",
+        "/proc/fs",
+        "/proc/irq",
+        "/proc/sys",
+        "/proc/sysrq-trigger"
+      ]
+
+    [[linux.uidMappings]]
+    containerID = 0
+    hostID = 1000
+    size = 1
+
+    [[linux.gidMappings]]
+    containerID = 0
+    hostID = 1000
+    size = 1
+
+    [[linux.namespaces]]
+    type = "pid"
+
+    [[linux.namespaces]]
+    type = "ipc"
+
+    [[linux.namespaces]]
+    type = "uts"
+
+    [[linux.namespaces]]
+    type = "mount"
+
+    [[linux.namespaces]]
+    type = "user"
+
+    [linux.resources]
+        [linux.resources.memory]
+        limit = 134217728
+        reservation = 134217728
