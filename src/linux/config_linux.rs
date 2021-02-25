@@ -1,16 +1,6 @@
+use super::error::{Error, Result};
 use crate::config::{Config, IDMap};
-
-pub type Result<T> = std::result::Result<T, LinuxProcessError>;
-
-pub enum LinuxProcessError {
-    Nix(nix::Error),
-
-    NoUidMapping,
-    NoUserMapping,
-
-    NoGidMapping,
-    NoGroupMapping,
-}
+use nix::unistd::{Gid, Uid};
 
 fn get_host_id_from_mapping(container_id: u64, mapping: &Vec<IDMap>) -> Option<u64> {
     for &m in mapping.iter() {
@@ -21,37 +11,40 @@ fn get_host_id_from_mapping(container_id: u64, mapping: &Vec<IDMap>) -> Option<u
     None
 }
 
-pub fn get_host_uid(config: &Config, container_uid: libc::uid_t) -> Result<libc::uid_t> {
-    if let Some(linux) = &config.linux {
-        if linux.namespaces.iter().any(|&x| x.kind == "user") {
-            if linux.uid_mappings.is_empty() {
-                return Err(LinuxProcessError::NoUidMapping);
-            }
-
-            return match get_host_id_from_mapping(container_uid as u64, &linux.uid_mappings) {
-                None => Err(LinuxProcessError::NoUserMapping),
-                Some(host_uid) => Ok(host_uid as libc::uid_t),
-            };
+pub fn get_host_uid(config: &Config, container_uid: Uid) -> Result<Uid> {
+    if config.linux.namespaces.iter().any(|&x| x.kind == "user") {
+        if config.linux.uid_mappings.is_empty() {
+            return Err(Error::NoUidMapping);
         }
+
+        return match get_host_id_from_mapping(
+            container_uid.as_raw() as u64,
+            &config.linux.uid_mappings,
+        ) {
+            None => Err(Error::NoUserMapping),
+            Some(host_uid) => Ok(Uid::from_raw(host_uid as u32)),
+        };
     }
 
     // left unchanged id.
     return Ok(container_uid);
 }
 
-pub fn get_host_gid(config: &Config, container_gid: libc::gid_t) -> Result<libc::gid_t> {
-    if let Some(linux) = &config.linux {
-        if linux.namespaces.iter().any(|&x| x.kind == "user") {
-            if linux.gid_mappings.is_empty() {
-                return Err(LinuxProcessError::NoGidMapping);
-            }
-
-            return match get_host_id_from_mapping(container_gid as u64, &linux.gid_mappings) {
-                None => Err(LinuxProcessError::NoGroupMapping),
-                Some(host_gid) => Ok(host_gid as libc::gid_t),
-            };
+pub fn get_host_gid(config: &Config, container_gid: Gid) -> Result<Gid> {
+    if config.linux.namespaces.iter().any(|&x| x.kind == "user") {
+        if config.linux.gid_mappings.is_empty() {
+            return Err(Error::NoGidMapping);
         }
+
+        return match get_host_id_from_mapping(
+            container_gid.as_raw() as u64,
+            &config.linux.gid_mappings,
+        ) {
+            None => Err(Error::NoGroupMapping),
+            Some(host_gid) => Ok(Gid::from_raw(host_gid as u32)),
+        };
     }
+
     // left unchanged id.
     return Ok(container_gid);
 }

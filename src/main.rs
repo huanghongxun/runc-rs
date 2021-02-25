@@ -2,6 +2,9 @@ mod config;
 mod linux;
 mod process;
 
+#[macro_use]
+extern crate scan_fmt;
+
 use clap::{App, Arg};
 
 fn main() {

@@ -1,5 +1,5 @@
 [package]
-name = "runguard"
+name = "runc-rs"
 version = "0.1.0"
 authors = ["huangyuhui", "Matrix contributors"]
 edition = "2018"
@@ -10,5 +10,10 @@ unshare = "0.6.0"
 clap = "2"
 toml = "0.5"
 serde = { version = "1.0", features = ["derive"] }
-nix = "0.11.0"
-libc = "0.2.26"
+nix = "0.20.0"
+libc = "0.2.86"
+thiserror = "1.0"
+once_cell = "1.7"
+scan_fmt = "0.2"
+log = "0.4"
+phf = { version = "0.7", features = ["macros"] }

@@ -1,20 +1,21 @@
+use nix::unistd::{Gid, Uid};
 use std::fs::File;
 use std::io::{self, BufRead};
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct User {
     pub name: String,
     pub password: String,
-    pub uid: libc::uid_t,
-    pub gid: libc::gid_t,
-    pub sgids: Vec<libc::gid_t>,
+    pub uid: Uid,
+    pub gid: Gid,
+    pub sgids: Vec<Gid>,
     pub comment: String,
     pub home: String,
     pub shell: String,
 }
 
 impl User {
-    pub fn find_user(uid: libc::uid_t, gid: libc::gid_t) -> io::Result<User> {
+    pub fn find_user(uid: Uid, gid: Gid) -> io::Result<User> {
         let users = User::parse_from_file("/etc/passwd")?;
         let groups = Group::parse_from_file("/etc/group")?;
         if let Some(match_user) = users.iter().find(|user| user.uid == uid && user.gid == gid) {
@@ -43,7 +44,7 @@ impl User {
                 name: String::from(splitted[0]),
                 password: String::from(splitted[1]),
                 uid: match splitted[2].parse::<libc::uid_t>() {
-                    Ok(uid) => uid,
+                    Ok(uid) => Uid::from_raw(uid),
                     Err(_) => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
@@ -52,7 +53,7 @@ impl User {
                     }
                 },
                 gid: match splitted[3].parse::<libc::gid_t>() {
-                    Ok(gid) => gid,
+                    Ok(gid) => Gid::from_raw(gid),
                     Err(_) => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
@@ -71,11 +72,10 @@ impl User {
     }
 }
 
-#[derive(Default)]
 pub struct Group {
     pub name: String,
     pub password: String,
-    pub gid: libc::gid_t,
+    pub gid: Gid,
     pub users: Vec<String>,
 }
 
@@ -93,7 +93,7 @@ impl Group {
                 name: String::from(splitted[0]),
                 password: String::from(splitted[1]),
                 gid: match splitted[2].parse::<libc::gid_t>() {
-                    Ok(gid) => gid,
+                    Ok(gid) => Gid::from_raw(gid),
                     Err(_) => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,

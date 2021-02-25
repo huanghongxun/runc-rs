@@ -1,12 +1,17 @@
+mod cgroup;
 mod config_linux;
+mod error;
+mod mount;
 mod namespace;
-mod process;
-mod restriction;
-mod user;
 mod prctl;
+mod process;
+mod selinux;
+mod system;
+mod user;
 
 use crate::config;
 use crate::process::ProcessStatus;
+use error::Result;
 use nix::sys::signal::Signal;
 use nix::unistd::Pid;
 use std::time::{Duration, SystemTime};
@@ -27,7 +32,7 @@ pub fn run(config: &config::Config, commands: Vec<&str>) -> ! {
     std::process::exit(0)
 }
 
-fn run_impl(config: &config::Config, commands: Vec<&str>) -> Result<(), nix::Error> {
+fn run_impl(config: &config::Config, commands: Vec<&str>) -> Result<()> {
     let mut process = LinuxProcess::new(
         config.clone(),
         commands.iter().map(|s| s.to_string()).collect(),

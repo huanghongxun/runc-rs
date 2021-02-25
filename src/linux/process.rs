@@ -1,8 +1,10 @@
-use super::config_linux::{get_host_gid, get_host_uid, LinuxProcessError};
+use super::config_linux::{get_host_gid, get_host_uid};
+use super::error::{Error, Result};
 use super::namespace::Namespace;
 use super::user::User;
-use super::LinuxProcess;
+use super::*;
 use crate::config;
+use crate::linux::prctl::prctl;
 use crate::process::ProcessStatus;
 use nix::mount::*;
 use nix::sys::signal::{kill, Signal};
@@ -11,9 +13,7 @@ use nix::unistd::{execvp, fork, ForkResult, Pid};
 use std::ffi::CString;
 use std::io;
 use std::os::unix::io::AsRawFd;
-use crate::linux::prctl::prctl;
-
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + 'static>>;
+use std::path::{Path, PathBuf};
 
 fn format_mount_label(src: &str, mount_label: &str) -> String {
     if !mount_label.is_empty() {
@@ -23,11 +23,11 @@ fn format_mount_label(src: &str, mount_label: &str) -> String {
             format!("{},context={}", src, mount_label)
         }
     } else {
-        src
+        String::from(src)
     }
 }
 
-fn close_fd_from(start_fd: i32) -> Result<()> {
+fn close_on_exec_from(start_fd: i32) -> Result<()> {
     for dir in std::fs::read_dir("/proc/self/fd")? {
         let ok_dir = dir?;
         let file_name = ok_dir.file_name().into_string()?;
@@ -37,25 +37,10 @@ fn close_fd_from(start_fd: i32) -> Result<()> {
             }
 
             // Ignores errors from fcntl because some fds may be already closed.
-            nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::FD_CLOEXEC));
-        }
-    }
-
-    Ok(())
-}
-
-fn mount_to_rootfs(mount: &config::Mount, rootfs: &str, mount_label: &str, enable_cgroups: bool) -> Result<()> {
-    let mut dest = mount.destination.clone();
-    if !dest.starts_with(rootfs) {
-        dest = format!("{}/{}", rootfs, dest);
-    }
-
-    match mount.kind.as_str() {
-        "proc" | "sysfs" => {
-            if std::fs::
-        }
-        _ => {
-
+            nix::fcntl::fcntl(
+                fd,
+                nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::FD_CLOEXEC),
+            );
         }
     }
 
@@ -70,16 +55,18 @@ fn fix_stdio_permissions(config: &config::Config, user: &User) -> Result<()> {
         io::stdin().as_raw_fd(),
         io::stdout().as_raw_fd(),
         io::stderr().as_raw_fd(),
-    ].iter() {
+    ]
+    .iter()
+    {
         let s = nix::sys::stat::fstat(fd)?;
         if s.st_rdev == null.st_rdev {
             continue;
         }
 
         match nix::unistd::fchown(fd, Some(user.uid), Some(user.gid)) {
-            Err(nix::Error::Sys(nix::errno::Errno::EINVAL)) |
-            Err(nix::Error::Sys(nix::errno::Errno::EPERM)) => {}
-            Err(err) => return Err(err),
+            Err(nix::Error::Sys(nix::errno::Errno::EINVAL))
+            | Err(nix::Error::Sys(nix::errno::Errno::EPERM)) => {}
+            Err(err) => return Err(Error::Nix(err)),
             _ => {}
         }
     }
@@ -125,10 +112,14 @@ impl LinuxProcess {
 
                 self.setup_rootfs()?;
 
-                if let Some(linux) = &self.config.linux {
-                    if linux.namespaces.iter().any(|&n| n.kind == "mount") {
-                        self.finalize_rootfs()?;
-                    }
+                if self
+                    .config
+                    .linux
+                    .namespaces
+                    .iter()
+                    .any(|&n| n.kind == "mount")
+                {
+                    self.finalize_rootfs()?;
                 }
 
                 self.setup_hostname()?;
@@ -196,20 +187,27 @@ impl LinuxProcess {
         let flag = if self.config.root_propagation != 0 {
             match MsFlags::from_bits(self.config.root_propagation) {
                 Some(bit) => bit,
-                None => return Err(io::Error::new(io::ErrorKind::InvalidInput, "root_propagation is not valid").into())
+                None => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "root_propagation is not valid",
+                    )
+                    .into())
+                }
             }
         } else {
             MsFlags::MS_SLAVE | MsFlags::MS_REC
         };
 
-        mount(None, "/", None, flag, None)?;
+        mount::<str, str, str, str>(None, "/", None, flag, None)?;
 
         Ok(())
     }
 
     fn needs_setup_dev(&self) -> bool {
         for mount in self.config.mounts {
-            mount_to_rootfs(&mount, self.config.root.path, self.config.mount_label, );
+            let real_mount = mount::Mount::parse_config(&mount, &self.config.root.path);
+            real_mount.mount(self.config.mount_label, true)?;
         }
 
         true
@@ -218,9 +216,14 @@ impl LinuxProcess {
     fn setup_rootfs(&self) -> Result<()> {
         self.prepare_root()?;
 
-        let has_cgroup_ns = self.config.linux.namespaces.iter().any(|&n| n.kind == "cgroup");
+        let has_cgroup_ns = self
+            .config
+            .linux
+            .namespaces
+            .iter()
+            .any(|&n| n.kind == "cgroup");
 
-
+        Ok(())
     }
 
     // 1.
@@ -247,7 +250,7 @@ impl LinuxProcess {
 
     // 4.
     fn setup_mounts(&self) -> Result<()> {
-
+        Ok(())
     }
 
     // 5.
@@ -304,7 +307,9 @@ impl LinuxProcess {
                         Some(format_mount_label("", self.config.mount_label.as_str()).as_str()),
                     );
                 }
-                Err(err) => { return Err(err.into()); }
+                Err(err) => {
+                    return Err(err.into());
+                }
                 _ => {}
             }
 
@@ -333,14 +338,14 @@ impl LinuxProcess {
 
     fn finalize_namespace(&self) -> Result<()> {
         // Skip stdin, stdout, stderr.
-        close_fd_from(3)?;
+        close_on_exec_from(3)?;
 
         // TODO: set capabilities
 
-        setup_user()?;
+        self.setup_user()?;
 
         if self.config.process.cwd != "" {
-            nix::unistd::chdir(&self.config.process.cwd)?;
+            nix::unistd::chdir(self.config.process.cwd.as_str())?;
         }
 
         Ok(())
@@ -348,26 +353,31 @@ impl LinuxProcess {
 
     fn setup_user(&self) -> Result<()> {
         let id = &self.config.process.user;
-        let user = User::find_user(id.uid, id.gid)?;
+        let user = User::find_user(
+            nix::unistd::Uid::from_raw(id.uid),
+            nix::unistd::Gid::from_raw(id.gid),
+        )?;
         get_host_uid(&self.config, user.uid)?;
         get_host_gid(&self.config, user.gid)?;
 
         fix_stdio_permissions(&self.config, &user)?;
 
-        let allow_sgroups = !self.config.rootless_euid && std::fs::read_to_string("/proc/self/setgroups")?.trim() != deny;
+        let allow_sgroups = !self.config.rootless_euid
+            && std::fs::read_to_string("/proc/self/setgroups")?.trim() != "deny";
         if allow_sgroups {
             // TODO: read additional groups.
             let supp_groups = &user.sgids;
-
-            nix::unistd::setgroups(supp_groups.iter().map(|&g| nix::unistd::Gid::from_raw(g)).collect());
+            nix::unistd::setgroups(&supp_groups);
         }
 
-        nix::unistd::setuid(nix::unistd::Uid::from_raw(user.uid))?;
-        nix::unistd::setgid(nix::unistd::Gid::from_raw(user.gid))?;
+        nix::unistd::setuid(user.uid)?;
+        nix::unistd::setgid(user.gid)?;
 
-        std::env::set_var("HOME", user.home);
+        if let Err(std::env::VarError::NotPresent) = std::env::var("HOME") {
+            // if we didn't get HOME already, set it based on the user's HOME.
+            std::env::set_var("HOME", user.home);
+        }
 
         Ok(())
     }
-
 }

@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
@@ -83,13 +84,13 @@ pub struct Rlimit {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Root {
-    pub path: String,
+    pub path: PathBuf,
     pub readonly: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Mount {
-    pub destination: String,
+    pub destination: PathBuf,
     #[serde(alias = "type")]
     pub kind: String,
 
@@ -111,10 +112,10 @@ pub struct Linux {
     pub namespaces: Vec<Namespace>,
 
     #[serde(default)]
-    pub masked_paths: Vec<String>,
+    pub masked_paths: Vec<PathBuf>,
 
     #[serde(default)]
-    pub readonly_paths: Vec<String>,
+    pub readonly_paths: Vec<PathBuf>,
 
     #[serde(default)]
     pub resources: Option<Resources>,
