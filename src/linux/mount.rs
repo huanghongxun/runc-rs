@@ -51,8 +51,10 @@ static PROPAGATION_FLAGS: phf::Map<&'static str, nix::mount::MsFlags> = phf_map!
     "runbindable" => nix::mount::MsFlags::MS_UNBINDABLE | nix::mount::MsFlags::MS_REC,
 };
 
+static DEFAULT_MOUNT_FLAGS: nix::mount::MsFlags = nix::mount::MsFlags::MS_NOEXEC | nix::mount::MsFlags::MS_NOSUID | nix::mount::MsFlags::MS_NODEV;
+
 pub struct Mount {
-    pub source: Option<std::path::PathBuf>,
+    pub source: Option<String>,
     pub destination: std::path::PathBuf,
     pub device: String,
     pub data: Vec<String>,
@@ -64,18 +66,18 @@ impl Mount {
     pub fn parse_config<P: AsRef<std::path::Path>>(
         config_mount: &config::Mount,
         rootfs: &P,
-    ) -> Mount {
+    ) -> Result<Mount> {
         let mut mount = Mount {
             source: if config_mount.source == "" {
                 None
             } else {
-                Some(std::path::PathBuf::from(config_mount.source))
+                Some(config_mount.source)
             },
-            destination: if config_mount.destination.starts_with(rootfs) {
+            destination: absolute(if config_mount.destination.starts_with(rootfs) {
                 config_mount.destination
             } else {
                 rootfs.as_ref().join(config_mount.destination)
-            },
+            })?,
             device: config_mount.kind,
             data: vec![],
             flags: nix::mount::MsFlags::empty(),
@@ -94,12 +96,12 @@ impl Mount {
                 mount.data.push(option);
             }
         }
-        mount
+        Ok(mount)
     }
 
     fn _mount(&self, mount_label: &str) -> Result<()> {
         let source = match self.source {
-            Some(path) => Some(&path),
+            Some(path) => Some(path.as_str()),
             None => None,
         };
         nix::mount::mount(
@@ -127,21 +129,37 @@ impl Mount {
         Ok(())
     }
 
-    fn mount_cgroup_v1(&self, mount_label: &str, enable_cgroups: bool) -> Result<()> {
+    fn mount_cgroup_v1(&self, mount_label: &str, in_cgroup_namespace: bool) -> Result<()> {
         std::fs::create_dir_all(self.destination)?;
+
+        let cgroup_mounts = cgroup::get_cgroup_mounts()?;
+
+        // /sys/fs/cgroup is tmpfs.
+        let tmpfs = Mount {
+            source: Some(String::from("tmpfs")),
+            destination: self.destination,
+            device: String::from("tmpfs"),
+            data: vec![String::from("mode=755")],
+            flags: DEFAULT_MOUNT_FLAGS,
+            propagation_flags: self.propagation_flags,
+        };
+        tmpfs.mount(mount_label, in_cgroup_namespace)?;
+
+        for mount in cgroup_mounts {
+            if in_cgroup_namespace {
+                let subsystem_path = self.
+            } else {
+                
+            }
+        }
 
         Ok(())
     }
 
-    fn mount_cgroup_v2(&self, mount_label: &str, enable_cgroups: bool) -> Result<()> {
-        let source = match self.source {
-            Some(path) => Some(&path),
-            None => None,
-        };
-
+    fn mount_cgroup_v2(&self, mount_label: &str, in_cgroup_namespace: bool) -> Result<()> {
         std::fs::create_dir_all(self.destination)?;
         match nix::mount::mount(
-            source,
+            self.source.map(|p| p.as_str()),
             &self.destination,
             Some("cgroup2"),
             self.flags,
@@ -165,7 +183,17 @@ impl Mount {
         }
     }
 
-    pub fn mount(&self, mount_label: &str, enable_cgroups: bool) -> Result<()> {
+    fn check_bind(&self) -> Result<()> {
+        match self.source {
+            None => Err(error::Error::BindWithoutSource),
+            Some(source) => {
+                let metadata = std::fs::metadata(source)?;
+                
+            }
+        }
+    }
+
+    pub fn mount(&self, mount_label: &str, in_cgroup_namespace: bool) -> Result<()> {
         match self.device.as_str() {
             "proc" | "sysfs" => {
                 match std::fs::metadata(self.destination) {
@@ -193,14 +221,14 @@ impl Mount {
             }
             "tmpfs" => {}
             "bind" => {
-                prepare_bind_mount(mount, rootfs)?;
+                self.prepare_bind()?;
                 self._mount(mount_label)?;
             }
             "cgroup" => {
                 if cgroup::is_cgroup_v2_unified_mode() {
-                    mount_cgroup_v2(mount, rootfs, mount_label, enable_cgroups);
+                    self.mount_cgroup_v2(mount_label, in_cgroup_namespace)?;
                 } else {
-                    mount_cgroup_v1(mount, rootfs, mount_label, enable_cgroups);
+                    self.mount_cgroup_v1(mount_label, in_cgroup_namespace)?;
                 }
             }
             _ => {}

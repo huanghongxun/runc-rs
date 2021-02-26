@@ -1,5 +1,5 @@
 use super::*;
-use log::{info, trace, warn};
+use log::warn;
 
 const UNIFIED_MOUNT_POINT: &str = "/sys/fs/cgroup";
 
@@ -21,10 +21,58 @@ pub fn is_cgroup_v2_unified_mode() -> bool {
 
 pub fn get_all_subsystems() -> Result<Vec<String>> {
     if is_cgroup_v2_unified_mode() {
-        std::fs::read
+        let controllers = std::fs::read_to_string("/sys/fs/cgroup/cgroup.controllers")?;
+        Ok(controllers
+            .split_whitespace()
+            .map(|s| String::from(s))
+            .collect())
+    } else {
+        Ok(procfs::cgroups()?.iter().map(|c| c.name).collect())
     }
 }
 
-pub fn get_cgroup_mounts() -> error::Result<Vec<mount::Mount>> {
-    Ok(mounts)
+pub struct CgroupMount {
+    pub mountpoint: std::path::PathBuf,
+    pub root: String,
+    pub subsystems: Vec<String>,
+}
+
+pub fn get_cgroup_mounts() -> Result<Vec<CgroupMount>> {
+    if is_cgroup_v2_unified_mode() {
+        let controllers = get_all_subsystems()?;
+        Ok(vec![])
+    } else {
+        let myself = procfs::process::Process::myself()?;
+        let myself_cgroups = myself.cgroups()?;
+        let myself_subsystems = std::collections::HashMap::new();
+        for cgroup in myself_cgroups {
+            for controller in cgroup.controllers {
+                myself_subsystems.insert(controller, false);
+            }
+        }
+
+        Ok(myself
+            .mountinfo()?
+            .iter()
+            .filter(|mountinfo| mountinfo.fs_type == "cgroup")
+            .map(|mountinfo| {
+                let mut cgroup_mount = CgroupMount {
+                    mountpoint: mountinfo.mount_point,
+                    root: mountinfo.root,
+                    subsystems: vec![],
+                };
+                for (option, _) in mountinfo.super_options.iter() {
+                    // cgroup filesystems marks its controller type by super options
+                    // e.g. mount -t cgroup -o rw,memory cgroup /sys/fs/cgroup/memory
+                    if myself_subsystems.contains_key(option) {
+                        // cgroup subsystem name may be 'name=systemd', we must deal with it.
+                        cgroup_mount
+                            .subsystems
+                            .push(option.trim_start_matches("name=").to_string());
+                    }
+                }
+                cgroup_mount
+            })
+            .collect())
+    }
 }
