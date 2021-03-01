@@ -51,7 +51,8 @@ static PROPAGATION_FLAGS: phf::Map<&'static str, nix::mount::MsFlags> = phf_map!
     "runbindable" => nix::mount::MsFlags::MS_UNBINDABLE | nix::mount::MsFlags::MS_REC,
 };
 
-static DEFAULT_MOUNT_FLAGS: nix::mount::MsFlags = nix::mount::MsFlags::MS_NOEXEC | nix::mount::MsFlags::MS_NOSUID | nix::mount::MsFlags::MS_NODEV;
+static DEFAULT_MOUNT_FLAGS: nix::mount::MsFlags =
+    nix::mount::MsFlags::MS_NOEXEC | nix::mount::MsFlags::MS_NOSUID | nix::mount::MsFlags::MS_NODEV;
 
 pub struct Mount {
     pub source: Option<String>,
@@ -73,11 +74,7 @@ impl Mount {
             } else {
                 Some(config_mount.source)
             },
-            destination: absolute(if config_mount.destination.starts_with(rootfs) {
-                config_mount.destination
-            } else {
-                rootfs.as_ref().join(config_mount.destination)
-            })?,
+            destination: join::secure_join(&rootfs.as_ref(), &config_mount.destination)?,
             device: config_mount.kind,
             data: vec![],
             flags: nix::mount::MsFlags::empty(),
@@ -147,9 +144,16 @@ impl Mount {
 
         for mount in cgroup_mounts {
             if in_cgroup_namespace {
-                let subsystem_path = self.
             } else {
-                
+                let cgroup_mount = Mount {
+                    source: mount.mountpoint.join(path: P),
+                    destination: ,
+                    device: "bind".to_string(),
+                    data: vec![],
+                    flags: nix::mount::MsFlags::MS_BIND |nix::mount::MsFlags::MS_REC | self.flags,
+                    propagation_flags: self.propagation_flags,
+                };
+                cgroup_mount.mount(mount_label, in_cgroup_namespace)?;
             }
         }
 
@@ -185,12 +189,10 @@ impl Mount {
 
     fn check_bind(&self) -> Result<()> {
         match self.source {
-            None => Err(error::Error::BindWithoutSource),
-            Some(source) => {
-                let metadata = std::fs::metadata(source)?;
-                
-            }
+            None => return Err(error::Error::BindWithoutSource),
+            Some(source) => std::fs::create_dir_all(&source)?,
         }
+        Ok(())
     }
 
     pub fn mount(&self, mount_label: &str, in_cgroup_namespace: bool) -> Result<()> {
@@ -221,7 +223,7 @@ impl Mount {
             }
             "tmpfs" => {}
             "bind" => {
-                self.prepare_bind()?;
+                self.check_bind()?;
                 self._mount(mount_label)?;
             }
             "cgroup" => {

@@ -43,5 +43,6 @@ pub fn parse_id_map<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<config::ID
             });
         }
     }
+
     Ok(result)
 }

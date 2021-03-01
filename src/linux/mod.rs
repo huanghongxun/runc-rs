@@ -1,6 +1,7 @@
 mod cgroup;
 mod config_linux;
 mod error;
+mod join;
 mod mount;
 mod namespace;
 mod prctl;
