@@ -7,8 +7,8 @@ static UNIFIED_INIT: once_cell::sync::OnceCell<bool> = once_cell::sync::OnceCell
 
 pub fn is_cgroup_v2_unified_mode() -> bool {
     *UNIFIED_INIT.get_or_init(|| {
-        let unifiedMountPoint = std::path::Path::new(UNIFIED_MOUNT_POINT);
-        if !unifiedMountPoint.exists() && system::is_running_in_user_namespace() {
+        let unified_mount_point = std::path::Path::new(UNIFIED_MOUNT_POINT);
+        if !unified_mount_point.exists() && system::is_running_in_user_namespace() {
             warn!("{} missing, assuming cgroup v1", UNIFIED_MOUNT_POINT);
             return false;
         }

@@ -269,7 +269,7 @@ impl Mount {
                 self._mount(mount_label)?;
 
                 // restore permission after mounting.
-                std::fs::set_permissions(&self.destination, perms);
+                std::fs::set_permissions(&self.destination, perms)?;
 
                 if self.flags & MsFlags::MS_RDONLY != MsFlags::empty() {
                     // _mount mounts tmpfs rw, remount here.

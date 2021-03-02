@@ -41,7 +41,7 @@ fn close_on_exec_from(start_fd: i32) -> Result<()> {
                 nix::fcntl::fcntl(
                     fd,
                     nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::FD_CLOEXEC),
-                );
+                )?;
             }
         }
     }
@@ -455,7 +455,7 @@ impl LinuxProcess {
             .to_clone_flag();
             match &namespace.path {
                 None => {
-                    nix::sched::unshare(nstype);
+                    nix::sched::unshare(nstype)?;
                 }
                 Some(path) => {
                     let fd = nix::fcntl::open(
@@ -463,7 +463,7 @@ impl LinuxProcess {
                         nix::fcntl::OFlag::O_RDONLY,
                         nix::sys::stat::Mode::empty(),
                     )?;
-                    nix::sched::setns(fd, nstype);
+                    nix::sched::setns(fd, nstype)?;
                 }
             }
         }
@@ -514,7 +514,7 @@ impl LinuxProcess {
                         Some("tmpfs"),
                         MsFlags::MS_RDONLY,
                         Some(format_mount_label("", self.config.mount_label.as_str()).as_str()),
-                    );
+                    )?;
                 }
                 Err(err) => {
                     return Err(err.into());
@@ -573,7 +573,7 @@ impl LinuxProcess {
         if allow_sgroups {
             // TODO: read additional groups.
             let supp_groups = &user.sgids;
-            setgroups(&supp_groups);
+            setgroups(&supp_groups)?;
         }
 
         setuid(user.uid)?;

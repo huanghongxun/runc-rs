@@ -88,13 +88,13 @@ impl TryFrom<&str> for Namespace {
 impl Namespace {
     pub fn to_clone_flag(&self) -> CloneFlags {
         match self {
-            Mount => CloneFlags::CLONE_NEWNS,
-            Uts => CloneFlags::CLONE_NEWUTS,
-            Ipc => CloneFlags::CLONE_NEWIPC,
-            User => CloneFlags::CLONE_NEWUSER,
-            Pid => CloneFlags::CLONE_NEWPID,
-            Net => CloneFlags::CLONE_NEWNET,
-            Cgroup => CloneFlags::CLONE_NEWCGROUP,
+            Namespace::Mount => CloneFlags::CLONE_NEWNS,
+            Namespace::Uts => CloneFlags::CLONE_NEWUTS,
+            Namespace::Ipc => CloneFlags::CLONE_NEWIPC,
+            Namespace::User => CloneFlags::CLONE_NEWUSER,
+            Namespace::Pid => CloneFlags::CLONE_NEWPID,
+            Namespace::Net => CloneFlags::CLONE_NEWNET,
+            Namespace::Cgroup => CloneFlags::CLONE_NEWCGROUP,
         }
     }
 }
