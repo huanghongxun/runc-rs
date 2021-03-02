@@ -1,9 +1,10 @@
 use super::error::{Error, Result};
+use super::*;
 use crate::config::{Config, IDMap};
 use nix::unistd::{Gid, Uid};
 
 fn get_host_id_from_mapping(container_id: u64, mapping: &Vec<IDMap>) -> Option<u64> {
-    for &m in mapping.iter() {
+    for m in mapping.iter() {
         if container_id >= m.container_id && container_id <= m.container_id + m.size - 1 {
             return Some(m.host_id + container_id - m.container_id);
         }
@@ -12,7 +13,7 @@ fn get_host_id_from_mapping(container_id: u64, mapping: &Vec<IDMap>) -> Option<u
 }
 
 pub fn get_host_uid(config: &Config, container_uid: Uid) -> Result<Uid> {
-    if config.linux.namespaces.iter().any(|&x| x.kind == "user") {
+    if has_namespace(config, namespace::Namespace::User) {
         if config.linux.uid_mappings.is_empty() {
             return Err(Error::NoUidMapping);
         }
@@ -31,7 +32,7 @@ pub fn get_host_uid(config: &Config, container_uid: Uid) -> Result<Uid> {
 }
 
 pub fn get_host_gid(config: &Config, container_gid: Gid) -> Result<Gid> {
-    if config.linux.namespaces.iter().any(|&x| x.kind == "user") {
+    if has_namespace(config, namespace::Namespace::User) {
         if config.linux.gid_mappings.is_empty() {
             return Err(Error::NoGidMapping);
         }
@@ -47,4 +48,12 @@ pub fn get_host_gid(config: &Config, container_gid: Gid) -> Result<Gid> {
 
     // left unchanged id.
     return Ok(container_gid);
+}
+
+pub fn has_namespace(config: &Config, kind: namespace::Namespace) -> bool {
+    config
+        .linux
+        .namespaces
+        .iter()
+        .any(|x| x.kind == kind.to_string())
 }

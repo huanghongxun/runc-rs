@@ -13,7 +13,10 @@ pub fn is_cgroup_v2_unified_mode() -> bool {
             return false;
         }
         match nix::sys::statfs::statfs(UNIFIED_MOUNT_POINT) {
-            Err(error) => panic!("canot statfs cgroup root: {}", UNIFIED_MOUNT_POINT),
+            Err(error) => panic!(
+                "canot statfs cgroup root: {} {:?}",
+                UNIFIED_MOUNT_POINT, error,
+            ),
             Ok(stat) => stat.filesystem_type() == nix::sys::statfs::CGROUP2_SUPER_MAGIC,
         }
     })
@@ -27,7 +30,7 @@ pub fn get_all_subsystems() -> Result<Vec<String>> {
             .map(|s| String::from(s))
             .collect())
     } else {
-        Ok(procfs::cgroups()?.iter().map(|c| c.name).collect())
+        Ok(procfs::cgroups()?.into_iter().map(|c| c.name).collect())
     }
 }
 
@@ -40,11 +43,15 @@ pub struct CgroupMount {
 pub fn get_cgroup_mounts() -> Result<Vec<CgroupMount>> {
     if is_cgroup_v2_unified_mode() {
         let controllers = get_all_subsystems()?;
-        Ok(vec![])
+        Ok(vec![CgroupMount {
+            mountpoint: UNIFIED_MOUNT_POINT.into(),
+            root: UNIFIED_MOUNT_POINT.into(),
+            subsystems: controllers,
+        }])
     } else {
         let myself = procfs::process::Process::myself()?;
         let myself_cgroups = myself.cgroups()?;
-        let myself_subsystems = std::collections::HashMap::new();
+        let mut myself_subsystems = std::collections::HashMap::new();
         for cgroup in myself_cgroups {
             for controller in cgroup.controllers {
                 myself_subsystems.insert(controller, false);
@@ -53,7 +60,7 @@ pub fn get_cgroup_mounts() -> Result<Vec<CgroupMount>> {
 
         Ok(myself
             .mountinfo()?
-            .iter()
+            .into_iter()
             .filter(|mountinfo| mountinfo.fs_type == "cgroup")
             .map(|mountinfo| {
                 let mut cgroup_mount = CgroupMount {
@@ -65,10 +72,7 @@ pub fn get_cgroup_mounts() -> Result<Vec<CgroupMount>> {
                     // cgroup filesystems marks its controller type by super options
                     // e.g. mount -t cgroup -o rw,memory cgroup /sys/fs/cgroup/memory
                     if myself_subsystems.contains_key(option) {
-                        // cgroup subsystem name may be 'name=systemd', we must deal with it.
-                        cgroup_mount
-                            .subsystems
-                            .push(option.trim_start_matches("name=").to_string());
+                        cgroup_mount.subsystems.push(option.to_string());
                     }
                 }
                 cgroup_mount

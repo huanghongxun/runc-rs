@@ -1,4 +1,5 @@
 use nix::sched::CloneFlags;
+use std::convert::TryFrom;
 
 /// Namespace name to unshare
 ///
@@ -67,16 +68,19 @@ pub enum Namespace {
     Cgroup,
 }
 
-impl From<&str> for Namespace {
-    fn from(ns: &str) -> Namespace {
+impl TryFrom<&str> for Namespace {
+    type Error = &'static str;
+
+    fn try_from(ns: &str) -> Result<Self, Self::Error> {
         match ns {
-            "mount" => Namespace::Mount,
-            "uts" => Namespace::Uts,
-            "ipc" => Namespace::Ipc,
-            "user" => Namespace::User,
-            "pid" => Namespace::Pid,
-            "net" => Namespace::Net,
-            "cgroup" => Namespace::Cgroup,
+            "mount" => Ok(Namespace::Mount),
+            "uts" => Ok(Namespace::Uts),
+            "ipc" => Ok(Namespace::Ipc),
+            "user" => Ok(Namespace::User),
+            "pid" => Ok(Namespace::Pid),
+            "net" => Ok(Namespace::Net),
+            "cgroup" => Ok(Namespace::Cgroup),
+            _ => Err("unknown namespace"),
         }
     }
 }
@@ -92,5 +96,23 @@ impl Namespace {
             Net => CloneFlags::CLONE_NEWNET,
             Cgroup => CloneFlags::CLONE_NEWCGROUP,
         }
+    }
+}
+
+impl std::fmt::Display for Namespace {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{:?}",
+            match self {
+                Namespace::Mount => "mount",
+                Namespace::Uts => "uts",
+                Namespace::Ipc => "ipc",
+                Namespace::User => "user",
+                Namespace::Pid => "pid",
+                Namespace::Net => "net",
+                Namespace::Cgroup => "cgroup",
+            }
+        )
     }
 }

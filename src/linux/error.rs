@@ -29,4 +29,22 @@ pub enum Error {
 
     #[error("bind mount requires a source")]
     BindWithoutSource,
+
+    #[error("invalid umask")]
+    InvalidUmask(u32),
+
+    #[error("invalid namespace")]
+    InvalidNamespace(String),
+
+    #[error("invalid device path")]
+    InvalidDevicePath { path: std::path::PathBuf },
+
+    #[error("invalid device type")]
+    InvalidDeviceType {
+        kind: String,
+        path: std::path::PathBuf,
+    },
+
+    #[error("invalid device mode")]
+    InvalidDeviceMode { path: std::path::PathBuf, mode: u32 },
 }

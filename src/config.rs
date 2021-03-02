@@ -34,7 +34,8 @@ pub struct Process {
     #[serde(default)]
     pub env: Vec<String>,
 
-    pub cwd: String,
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
 
     pub capabilities: Capabilities,
 
@@ -52,6 +53,9 @@ pub struct User {
 
     // gid inside container
     pub gid: libc::gid_t,
+
+    #[serde(default)]
+    pub umask: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -109,6 +113,9 @@ pub struct Linux {
     pub gid_mappings: Vec<IDMap>,
 
     #[serde(default)]
+    pub devices: Vec<Device>,
+
+    #[serde(default)]
     pub namespaces: Vec<Namespace>,
 
     #[serde(default)]
@@ -133,6 +140,29 @@ pub struct IDMap {
 
     /// Number of uid/gids that this entry maps from host into guest user namespace.
     pub size: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Device {
+    #[serde(alias = "type")]
+    pub kind: String,
+
+    pub path: PathBuf,
+
+    #[serde(default)]
+    pub major: u64,
+
+    #[serde(default)]
+    pub minor: u64,
+
+    #[serde(alias = "fileMode")]
+    pub file_mode: u32,
+
+    #[serde(default)]
+    pub uid: libc::uid_t,
+
+    #[serde(default)]
+    pub gid: libc::gid_t,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

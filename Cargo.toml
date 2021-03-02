@@ -18,3 +18,4 @@ scan_fmt = "0.2"
 log = "0.4"
 phf = { version = "0.7", features = ["macros"] }
 procfs = "0.9"
+scopeguard = "1.1"

@@ -10,6 +10,13 @@ pub fn secure_join<P1: AsRef<Path>, P2: AsRef<Path>>(
     let mut n = 0;
 
     loop {
+        n = n + 1;
+        if n > 255 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "meet symlink loop",
+            ));
+        }
         match current_path.components().next() {
             None => break,
             Some(Component::RootDir) => {
@@ -17,7 +24,7 @@ pub fn secure_join<P1: AsRef<Path>, P2: AsRef<Path>>(
             }
             Some(Component::CurDir) => continue,
             Some(Component::Normal(c)) => {
-                let real_path = root.as_ref().join(path);
+                let real_path = root.as_ref().join(&path);
                 match std::fs::read_link(real_path) {
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                         path.push(c);

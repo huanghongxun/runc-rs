@@ -32,7 +32,7 @@ pub fn current_process_gid_map() -> Result<Vec<config::IDMap>> {
 
 pub fn parse_id_map<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<config::IDMap>> {
     let file = std::fs::File::open(path)?;
-    let result: Vec<config::IDMap> = Vec::new();
+    let mut result: Vec<config::IDMap> = Vec::new();
     for line_result in io::BufReader::new(file).lines() {
         if let Ok(line) = line_result {
             let (id, parent_id, count) = scan_fmt!(line.as_str(), "{}{}{}", u64, u64, u64)?;

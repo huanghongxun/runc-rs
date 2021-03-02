@@ -4,6 +4,8 @@ mod process;
 
 #[macro_use]
 extern crate scan_fmt;
+#[macro_use]
+extern crate scopeguard;
 
 use clap::{App, Arg};
 
