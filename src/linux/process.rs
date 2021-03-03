@@ -51,7 +51,7 @@ fn close_on_exec_from(start_fd: i32) -> Result<()> {
 
 // Fixes the permission of standard input/output within the container to the specified user.
 // The ownership needs to match because it is created outside of the container.
-fn fix_stdio_permissions(config: &config::Config, user: &User) -> Result<()> {
+fn fix_stdio_permissions(user: &User) -> Result<()> {
     let null = nix::sys::stat::stat("/dev/null")?;
     for &fd in [
         io::stdin().as_raw_fd(),
@@ -95,6 +95,7 @@ impl LinuxProcess {
             match fork()? {
                 ForkResult::Parent { child, .. } => {
                     self.pid = Some(child);
+                    self.status = ProcessStatus::Running;
                     Ok(())
                 }
                 ForkResult::Child => self.child(),
@@ -117,6 +118,8 @@ impl LinuxProcess {
             let mut splitter = env_str.splitn(2, "=");
             std::env::set_var(splitter.next().unwrap(), splitter.next().unwrap());
         }
+
+        self.setup_ns()?;
 
         self.setup_rootfs()?;
 
@@ -372,15 +375,6 @@ impl LinuxProcess {
         Ok(())
     }
 
-    fn setup_chroot(&self) -> Result<()> {
-        chroot(&self.config.root.path)?;
-        match self.config.process.cwd {
-            Some(ref cwd) => chdir(cwd)?,
-            None => chdir("/")?,
-        }
-        Ok(())
-    }
-
     fn setup_rootfs(&self) -> Result<()> {
         self.prepare_root()?;
 
@@ -411,7 +405,13 @@ impl LinuxProcess {
         }
 
         if let Some(cwd) = &self.config.process.cwd {
+            if cwd.exists() && !cwd.is_dir() {
+                return Err(error::Error::CwdNotDirectory {
+                    path: cwd.to_path_buf(),
+                });
+            }
             std::fs::create_dir_all(cwd)?;
+            chdir(cwd)?;
         }
 
         Ok(())
@@ -566,7 +566,7 @@ impl LinuxProcess {
         get_host_uid(&self.config, user.uid)?;
         get_host_gid(&self.config, user.gid)?;
 
-        fix_stdio_permissions(&self.config, &user)?;
+        fix_stdio_permissions(&user)?;
 
         let allow_sgroups = !self.config.rootless_euid
             && std::fs::read_to_string("/proc/self/setgroups")?.trim() != "deny";

@@ -1,7 +1,7 @@
 use super::*;
 use nix::mount::*;
 use phf::phf_map;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 struct Flag {
     clear: bool,
@@ -126,7 +126,7 @@ impl Mount {
     }
 
     fn mount_cgroup_v1(&self, mount_label: &str, in_cgroup_namespace: bool) -> Result<()> {
-        std::fs::create_dir_all(&self.destination)?;
+        self.create_dir_all(&self.destination)?;
 
         let cgroup_mounts = cgroup::get_cgroup_mounts()?;
         let cgroups: std::collections::HashMap<String, String> =
@@ -155,7 +155,7 @@ impl Mount {
 
         for mount in cgroup_mounts {
             if in_cgroup_namespace {
-                std::fs::create_dir_all(&self.destination)?;
+                self.create_dir_all(&self.destination)?;
 
                 let mut cgroup_mount = Mount {
                     source: Some(PathBuf::from("cgroup")),
@@ -205,8 +205,8 @@ impl Mount {
         Ok(())
     }
 
-    fn mount_cgroup_v2(&self, mount_label: &str, in_cgroup_namespace: bool) -> Result<()> {
-        std::fs::create_dir_all(&self.destination)?;
+    fn mount_cgroup_v2(&self, mount_label: &str) -> Result<()> {
+        self.create_dir_all(&self.destination)?;
         match mount(
             self.source.as_ref(),
             &self.destination,
@@ -234,7 +234,11 @@ impl Mount {
 
     fn check_bind(&self) -> Result<()> {
         match &self.source {
-            None => return Err(error::Error::BindWithoutSource),
+            None => {
+                return Err(error::Error::BindWithoutSource {
+                    destination: self.destination.to_path_buf(),
+                })
+            }
             Some(source) => std::fs::create_dir_all(&source)?,
         }
         Ok(())
@@ -252,18 +256,28 @@ impl Mount {
         Ok(())
     }
 
+    fn create_dir_all(&self, path: &Path) -> Result<()> {
+        if path.exists() && !path.is_dir() {
+            Err(error::Error::MountpointNotDirectory {
+                path: path.to_path_buf(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn mount(&self, mount_label: &str, in_cgroup_namespace: bool) -> Result<()> {
         match self.device.as_str() {
             "proc" | "sysfs" => {
-                std::fs::create_dir_all(&self.destination)?;
+                self.create_dir_all(&self.destination)?;
                 self._mount("")?;
             }
             "mqueue" => {
-                std::fs::create_dir_all(&self.destination)?;
+                self.create_dir_all(&self.destination)?;
                 self._mount("")?;
             }
             "tmpfs" => {
-                std::fs::create_dir_all(&self.destination)?;
+                self.create_dir_all(&self.destination)?;
                 let perms = std::fs::metadata(&self.destination)?.permissions();
 
                 self._mount(mount_label)?;
@@ -288,13 +302,13 @@ impl Mount {
             }
             "cgroup" => {
                 if cgroup::is_cgroup_v2_unified_mode() {
-                    self.mount_cgroup_v2(mount_label, in_cgroup_namespace)?;
+                    self.mount_cgroup_v2(mount_label)?;
                 } else {
                     self.mount_cgroup_v1(mount_label, in_cgroup_namespace)?;
                 }
             }
             _ => {
-                std::fs::create_dir_all(&self.destination)?;
+                self.create_dir_all(&self.destination)?;
                 self._mount(mount_label)?;
             }
         }

@@ -26,10 +26,6 @@ pub fn current_process_uid_map() -> Result<Vec<config::IDMap>> {
     parse_id_map("/proc/self/uid_map")
 }
 
-pub fn current_process_gid_map() -> Result<Vec<config::IDMap>> {
-    parse_id_map("/proc/self/gid_map")
-}
-
 pub fn parse_id_map<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<config::IDMap>> {
     let file = std::fs::File::open(path)?;
     let mut result: Vec<config::IDMap> = Vec::new();

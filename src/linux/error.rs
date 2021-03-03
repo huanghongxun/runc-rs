@@ -12,11 +12,11 @@ pub enum Error {
     #[error("filesystem {path:?} must be mounted on ordinary directory")]
     MountpointNotDirectory { path: std::path::PathBuf },
 
+    #[error("Expected working directory {path:?}, but not a directory")]
+    CwdNotDirectory { path: std::path::PathBuf },
+
     #[error("cannot parse uid_map")]
     UidMapMalformed(#[from] scan_fmt::parse::ScanError),
-
-    #[error("malformed mount flags")]
-    MountFlagsMalformed { flags: u64 },
 
     #[error("user namespaces enabled, but no uid mappings found")]
     NoUidMapping,
@@ -28,7 +28,7 @@ pub enum Error {
     NoGroupMapping,
 
     #[error("bind mount requires a source")]
-    BindWithoutSource,
+    BindWithoutSource { destination: std::path::PathBuf },
 
     #[error("invalid umask")]
     InvalidUmask(u32),
