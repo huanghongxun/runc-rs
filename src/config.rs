@@ -116,6 +116,9 @@ pub struct Linux {
     pub devices: Vec<Device>,
 
     #[serde(default)]
+    pub seccomp: Option<Seccomp>,
+
+    #[serde(default)]
     pub namespaces: Vec<Namespace>,
 
     #[serde(default)]
@@ -163,6 +166,42 @@ pub struct Device {
 
     #[serde(default)]
     pub gid: libc::gid_t,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Seccomp {
+    #[serde(alias = "defaultAction")]
+    pub default_action: String,
+
+    pub architectures: Vec<String>,
+
+    pub syscalls: Vec<Syscall>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Syscall {
+    #[serde(default)]
+    pub names: Option<Vec<String>>,
+
+    #[serde(default)]
+    pub nr: Option<usize>,
+
+    pub action: String,
+
+    #[serde(default, alias = "errnoRet")]
+    pub errno_ret: i64,
+
+    #[serde(default)]
+    pub args: Vec<SyscallArg>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct SyscallArg {
+    pub index: u32,
+    pub value: u64,
+    #[serde(default, alias = "valueTwo")]
+    pub value_two: Option<u64>,
+    pub op: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

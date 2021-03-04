@@ -79,8 +79,8 @@ fn fix_stdio_permissions(user: &User) -> Result<()> {
 impl LinuxProcess {
     pub fn new(config: config::Config, command: Vec<String>) -> LinuxProcess {
         LinuxProcess {
-            config: config,
-            command: command,
+            config,
+            command,
             pid: None,
             status: ProcessStatus::Ready,
         }
@@ -132,12 +132,17 @@ impl LinuxProcess {
         self.setup_mask_paths()?;
         self.setup_no_new_privileges()?;
 
+        // Without no new privileges, seccomp is a privileged operation,
+        // so we need to do this before dropping capabilities.
         if !self.config.process.no_new_privileges {
             self.setup_seccomp()?;
         }
 
         self.finalize_namespace()?;
 
+        // With no new privileges, we must postpone seccomp as close to
+        // execvp as possible, so as few syscalls take place afterward.
+        // And user can reduce allowed syscalls as they need.
         if self.config.process.no_new_privileges {
             self.setup_seccomp()?;
         }
@@ -169,13 +174,13 @@ impl LinuxProcess {
                 WaitStatus::PtraceEvent(..) => {}
                 WaitStatus::PtraceSyscall(..) => {}
                 WaitStatus::Exited(x, exitcode) => {
-                    assert!(x == self.pid.unwrap());
+                    assert_eq!(x, self.pid.unwrap());
 
                     self.status = ProcessStatus::Exited(exitcode as u8);
                     return Ok(self.status);
                 }
                 WaitStatus::Signaled(x, signal, _) => {
-                    assert!(x == self.pid.unwrap());
+                    assert_eq!(x, self.pid.unwrap());
                     self.status = ProcessStatus::Signaled(signal);
                     return Ok(self.status);
                 }
@@ -404,16 +409,6 @@ impl LinuxProcess {
             self.chroot()?;
         }
 
-        if let Some(cwd) = &self.config.process.cwd {
-            if cwd.exists() && !cwd.is_dir() {
-                return Err(error::Error::CwdNotDirectory {
-                    path: cwd.to_path_buf(),
-                });
-            }
-            std::fs::create_dir_all(cwd)?;
-            chdir(cwd)?;
-        }
-
         Ok(())
     }
 
@@ -539,8 +534,74 @@ impl LinuxProcess {
         Ok(())
     }
 
+    fn convert_seccomp_action(&self, action: &str, errno: i64) -> Result<seccomp::Action> {
+        match action {
+            "SCMP_ACT_KILL" => Ok(seccomp::Action::Kill),
+            "SCMP_ACT_KILL_PROCESS" => Ok(seccomp::Action::KillProcess),
+            "SCMP_ACT_TRAP" => Ok(seccomp::Action::Trap),
+            "SCMP_ACT_ERRNO" => Ok(seccomp::Action::Errno(errno as i32)),
+            "SCMP_ACT_TRACE" => Ok(seccomp::Action::Trace(errno as u32)),
+            "SCMP_ACT_ALLOW" => Ok(seccomp::Action::Allow),
+            _ => Err(error::Error::InvalidSeccompAction {
+                action: action.to_string(),
+            }),
+        }
+    }
+
+    fn convert_seccomp_op(&self, op: &str) -> Result<seccomp::Op> {
+        match op {
+            "SCMP_CMP_NE" => Ok(seccomp::Op::Ne),
+            "SCMP_CMP_LT" => Ok(seccomp::Op::Lt),
+            "SCMP_CMP_LE" => Ok(seccomp::Op::Le),
+            "SCMP_CMP_EQ" => Ok(seccomp::Op::Eq),
+            "SCMP_CMP_GE" => Ok(seccomp::Op::Ge),
+            "SCMP_CMP_GT" => Ok(seccomp::Op::Gt),
+            "SCMP_CMP_MASKED_EQ" => Ok(seccomp::Op::MaskedEq),
+            _ => Err(error::Error::InvalidSeccompOp { op: op.to_string() }),
+        }
+    }
+
     fn setup_seccomp(&self) -> Result<()> {
-        // TODO.
+        if let Some(s) = &self.config.linux.seccomp {
+            let context = seccomp::Context::default(
+                self.convert_seccomp_action(&s.default_action, libc::EPERM as i64)?,
+            )?;
+
+            for syscall in s.syscalls.iter() {
+                match syscall.nr {
+                    Some(nr) => {
+                        let mut rule = seccomp::Rule::new(
+                            nr,
+                            None,
+                            self.convert_seccomp_action(&syscall.action, syscall.errno_ret)?,
+                        );
+                        for arg in syscall.args.iter() {
+                            let mut compare = seccomp::Compare::arg(arg.index)
+                                .with(arg.value)
+                                .using(self.convert_seccomp_op(&arg.op)?);
+                            if let Some(value2) = arg.value_two {
+                                compare.and(value2);
+                            }
+                            match compare.build() {
+                                Some(cmp) => rule.add_comparison(cmp),
+                                None => {
+                                    return Err(error::Error::InvalidSeccompArg {
+                                        index: arg.index,
+                                        value: arg.value,
+                                        value_two: arg.value_two,
+                                        op: arg.op,
+                                    })
+                                }
+                            };
+                        }
+                        context.add_rule(rule)?;
+                    }
+                    None => return Err(error::Error::InvalidSeccompNr),
+                };
+            }
+
+            context.load()?;
+        }
 
         Ok(())
     }
@@ -551,11 +612,16 @@ impl LinuxProcess {
 
         // TODO: set capabilities
 
+        // preserve existing capabilities while we change users.
+        prctl::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0)?;
+
         self.setup_user()?;
 
-        if let Some(ref cwd) = self.config.process.cwd {
+        if let Some(cwd) = &self.config.process.cwd {
             chdir(cwd)?;
         }
+
+        prctl::prctl(libc::PR_SET_KEEPCAPS, 0, 0, 0, 0)?;
 
         Ok(())
     }

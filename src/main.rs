@@ -2,6 +2,8 @@ mod config;
 mod linux;
 mod process;
 
+extern crate libc;
+
 #[macro_use]
 extern crate scan_fmt;
 #[macro_use]

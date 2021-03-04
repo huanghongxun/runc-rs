@@ -6,6 +6,7 @@ mod mount;
 mod namespace;
 mod prctl;
 mod process;
+mod seccomp;
 mod selinux;
 mod system;
 mod user;

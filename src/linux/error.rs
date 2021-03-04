@@ -8,6 +8,8 @@ pub enum Error {
     Nix(#[from] nix::Error),
     #[error("procfs error")]
     Proc(#[from] procfs::ProcError),
+    #[error("seccomp error")]
+    Seccomp(#[from] super::seccomp::SeccompError),
 
     #[error("filesystem {path:?} must be mounted on ordinary directory")]
     MountpointNotDirectory { path: std::path::PathBuf },
@@ -47,4 +49,18 @@ pub enum Error {
 
     #[error("invalid device mode")]
     InvalidDeviceMode { path: std::path::PathBuf, mode: u32 },
+
+    #[error("invalid seccomp action")]
+    InvalidSeccompAction { action: String },
+    #[error("invalid seccomp op")]
+    InvalidSeccompOp { op: String },
+    #[error("invalid seccomp nr")]
+    InvalidSeccompNr,
+    #[error("invalid seccomp arg")]
+    InvalidSeccompArg {
+        index: u32,
+        value: u64,
+        value_two: Option<u64>,
+        op: String,
+    },
 }
