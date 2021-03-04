@@ -226,20 +226,3 @@ impl Drop for Context {
         unsafe { seccomp_release(self.int) }
     }
 }
-
-#[test]
-fn it_works() {
-    fn test() -> Result<(), Box<dyn Error>> {
-        let mut ctx = Context::default(Action::Allow)?;
-        ctx.add_rule(Rule::new(
-            105,
-            Compare::arg(0).using(Op::Eq).with(1000).build().unwrap(),
-            Action::Errno(libc::EPERM),
-        ))?;
-        ctx.load()?;
-        let ret = unsafe { libc::setuid(1000) };
-        println!("ret = {}, uid = {}", ret, unsafe { libc::getuid() });
-        Ok(())
-    }
-    test().unwrap();
-}

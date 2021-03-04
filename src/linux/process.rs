@@ -91,6 +91,8 @@ impl LinuxProcess {
     }
 
     pub fn start(&mut self) -> Result<()> {
+        self.setup_ns()?;
+
         unsafe {
             match fork()? {
                 ForkResult::Parent { child, .. } => {
@@ -118,8 +120,6 @@ impl LinuxProcess {
             let mut splitter = env_str.splitn(2, "=");
             std::env::set_var(splitter.next().unwrap(), splitter.next().unwrap());
         }
-
-        self.setup_ns()?;
 
         self.setup_rootfs()?;
 
@@ -440,27 +440,55 @@ impl LinuxProcess {
         Ok(())
     }
 
-    // 1.
-    fn setup_ns(&self) -> Result<()> {
+    fn enter_namespace(&self, ns: namespace::Namespace, path: Option<&String>) -> Result<()> {
+        let nstype = ns.to_clone_flag();
+        match path {
+            None => {
+                nix::sched::unshare(nstype)?;
+            }
+            Some(path) => {
+                let fd = nix::fcntl::open(
+                    path.as_str(),
+                    nix::fcntl::OFlag::O_RDONLY,
+                    nix::sys::stat::Mode::empty(),
+                )?;
+                nix::sched::setns(fd, nstype)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn setup_user_ns(&self) -> Result<()> {
         for namespace in self.config.linux.namespaces.iter() {
-            let nstype = match Namespace::try_from(namespace.kind.as_str()) {
+            let ns = match Namespace::try_from(namespace.kind.as_str()) {
                 Ok(ns) => ns,
                 Err(_) => return Err(error::Error::InvalidNamespace(namespace.kind.clone())),
+            };
+            if ns == namespace::Namespace::User {
+                // we first unshare user namespace, so we may have root permission to do privileged operations.
+                self.enter_namespace(ns, namespace.path.as_ref())?;
             }
-            .to_clone_flag();
-            match &namespace.path {
-                None => {
-                    nix::sched::unshare(nstype)?;
-                }
-                Some(path) => {
-                    let fd = nix::fcntl::open(
-                        path.as_str(),
-                        nix::fcntl::OFlag::O_RDONLY,
-                        nix::sys::stat::Mode::empty(),
-                    )?;
-                    nix::sched::setns(fd, nstype)?;
-                }
+        }
+
+        Ok(())
+    }
+
+    /// Enter namespaces specified in configuration.
+    ///
+    /// Please note that unshare and setns are called in parent process, not child process.
+    /// Because PID namespace only takes effect on child processes, not the calling process.
+    fn setup_ns(&self) -> Result<()> {
+        self.setup_user_ns()?;
+        for namespace in self.config.linux.namespaces.iter() {
+            let ns = match Namespace::try_from(namespace.kind.as_str()) {
+                Ok(ns) => ns,
+                Err(_) => return Err(error::Error::InvalidNamespace(namespace.kind.clone())),
+            };
+            if ns == namespace::Namespace::User {
+                // we have already unshared user namespace in setup_user_ns.
+                continue;
             }
+            self.enter_namespace(ns, namespace.path.as_ref())?;
         }
 
         Ok(())
@@ -563,7 +591,7 @@ impl LinuxProcess {
 
     fn setup_seccomp(&self) -> Result<()> {
         if let Some(s) = &self.config.linux.seccomp {
-            let context = seccomp::Context::default(
+            let mut context = seccomp::Context::default(
                 self.convert_seccomp_action(&s.default_action, libc::EPERM as i64)?,
             )?;
 
@@ -580,7 +608,7 @@ impl LinuxProcess {
                                 .with(arg.value)
                                 .using(self.convert_seccomp_op(&arg.op)?);
                             if let Some(value2) = arg.value_two {
-                                compare.and(value2);
+                                compare = compare.and(value2);
                             }
                             match compare.build() {
                                 Some(cmp) => rule.add_comparison(cmp),
@@ -589,7 +617,7 @@ impl LinuxProcess {
                                         index: arg.index,
                                         value: arg.value,
                                         value_two: arg.value_two,
-                                        op: arg.op,
+                                        op: arg.op.clone(),
                                     })
                                 }
                             };
@@ -607,7 +635,7 @@ impl LinuxProcess {
     }
 
     fn finalize_namespace(&self) -> Result<()> {
-        // Skip stdin, stdout, stderr.
+        // Close all fds other than stdin, stdout, stderr.
         close_on_exec_from(3)?;
 
         // TODO: set capabilities
@@ -618,6 +646,11 @@ impl LinuxProcess {
         self.setup_user()?;
 
         if let Some(cwd) = &self.config.process.cwd {
+            if !cwd.is_dir() {
+                return Err(error::Error::CwdNotDirectory {
+                    path: cwd.to_path_buf(),
+                });
+            }
             chdir(cwd)?;
         }
 

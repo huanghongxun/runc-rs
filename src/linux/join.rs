@@ -1,11 +1,17 @@
+use std::ffi::OsString;
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 pub fn secure_join<P1: AsRef<Path>, P2: AsRef<Path>>(
     root: &P1,
     unsafe_path: &P2,
 ) -> io::Result<PathBuf> {
-    let mut current_path = unsafe_path.as_ref().to_path_buf();
+    let mut current_path: std::collections::VecDeque<std::ffi::OsString> = unsafe_path
+        .as_ref()
+        .to_path_buf()
+        .components()
+        .map(|c| OsString::from(c.as_os_str()))
+        .collect();
     let mut path = PathBuf::new();
     let mut n = 0;
 
@@ -17,21 +23,23 @@ pub fn secure_join<P1: AsRef<Path>, P2: AsRef<Path>>(
                 "meet symlink loop",
             ));
         }
-        match current_path.components().next() {
-            None => break,
-            Some(Component::RootDir) => {
+
+        if let Some(component) = &current_path.pop_front() {
+            if component == "/" {
                 path.clear();
-            }
-            Some(Component::CurDir) => continue,
-            Some(Component::Normal(c)) => {
+            } else if component == "." {
+                // do nothing
+            } else if component == ".." {
+                path.pop();
+            } else {
                 let real_path = root.as_ref().join(&path);
                 match std::fs::read_link(real_path) {
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                        path.push(c);
+                        path.push(component);
                         // Keep non-existent path components.
                     }
                     Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
-                        path.push(c);
+                        path.push(component);
                         // Ignore normal path.
                     }
                     Err(err) => return Err(err),
@@ -39,19 +47,24 @@ pub fn secure_join<P1: AsRef<Path>, P2: AsRef<Path>>(
                         if symlink.is_absolute() {
                             path.clear();
                         } else {
-                            current_path = symlink.join(current_path);
+                            let mut path = symlink.clone();
+                            for rest_component in current_path.iter() {
+                                path = path.join(rest_component);
+                            }
+                            current_path = path
+                                .components()
+                                .map(|c| OsString::from(c.as_os_str()))
+                                .collect();
                         }
                     }
                 }
             }
-            Some(Component::ParentDir) => {
-                path.pop();
-            }
-            Some(Component::Prefix(_)) => unreachable!(),
+        } else {
+            break;
         }
     }
 
-    Ok(path)
+    Ok(root.as_ref().join(&path))
 }
 
 #[cfg(test)]
@@ -60,7 +73,7 @@ mod tests {
     fn no_change() {
         assert_eq!(
             std::path::PathBuf::from("/nonexistent/a/b/c/d/e"),
-            Ok(super::secure_join(&"/nonexistent/a/b/c/d/e", &""))
+            super::secure_join(&"/nonexistent/a/b/c/d/e", &"").unwrap()
         );
     }
 
@@ -68,7 +81,7 @@ mod tests {
     fn normal_join() {
         assert_eq!(
             std::path::PathBuf::from("/nonexistent/a/b/c/d/e"),
-            Ok(super::secure_join(&"/nonexistent", &"a/b/c/d/e"))
+            super::secure_join(&"/nonexistent", &"a/b/c/d/e").unwrap()
         );
     }
 
@@ -76,7 +89,7 @@ mod tests {
     fn absolute_path() {
         assert_eq!(
             std::path::PathBuf::from("/nonexistent/a/b/c/d/e"),
-            Ok(super::secure_join(&"/nonexistent", &"/a/b/c/d/e"))
+            super::secure_join(&"/nonexistent", &"/a/b/c/d/e").unwrap()
         );
     }
 
@@ -84,7 +97,7 @@ mod tests {
     fn parent_dir() {
         assert_eq!(
             std::path::PathBuf::from("/nonexistent/a/c"),
-            Ok(super::secure_join(&"/nonexistent", &"a/b/../c"))
+            super::secure_join(&"/nonexistent", &"a/b/../c").unwrap()
         );
     }
 
@@ -92,7 +105,7 @@ mod tests {
     fn parent_dir_out_of_scope() {
         assert_eq!(
             std::path::PathBuf::from("/nonexistent/c"),
-            Ok(super::secure_join(&"/nonexistent", &"../../c"))
+            super::secure_join(&"/nonexistent", &"../../c").unwrap()
         );
     }
 }

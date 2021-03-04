@@ -124,7 +124,7 @@ options = [
 ]
 
 [root]
-path = "/home/huangyuhui/runctest/rootfs"
+path = "rootfs"
 readonly = true
 
 [linux]

@@ -196,7 +196,7 @@ pub struct Syscall {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
-struct SyscallArg {
+pub struct SyscallArg {
     pub index: u32,
     pub value: u64,
     #[serde(default, alias = "valueTwo")]

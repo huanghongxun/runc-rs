@@ -1,6 +1,7 @@
 use super::*;
 use nix::mount::*;
 use phf::phf_map;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 struct Flag {
@@ -100,6 +101,13 @@ impl Mount {
     }
 
     fn _mount(&self, mount_label: &str) -> Result<()> {
+        let output = std::process::Command::new("ls")
+            .args(&["-al", self.destination.parent().unwrap().to_str().unwrap()])
+            .output()?;
+        std::io::stdout().write_all(&output.stdout).unwrap();
+        std::io::stderr().write_all(&output.stderr).unwrap();
+
+        println!("Mounting {:?} {:?}", self.source, self.destination);
         mount(
             self.source.as_ref(),
             &self.destination,
