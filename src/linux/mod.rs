@@ -8,6 +8,7 @@ mod prctl;
 mod process;
 mod seccomp;
 mod selinux;
+#[macro_use]
 mod system;
 mod user;
 
@@ -28,10 +29,9 @@ pub struct LinuxProcess {
     status: ProcessStatus,
 }
 
-pub fn run(config: &config::Config, commands: Vec<&str>) -> ! {
-    run_impl(config, commands).expect("Failed to run container");
-
-    std::process::exit(0)
+pub fn run(config: &config::Config, commands: Vec<&str>) -> Result<()> {
+    run_impl(config, commands)?;
+    Ok(())
 }
 
 fn run_impl(config: &config::Config, commands: Vec<&str>) -> Result<()> {

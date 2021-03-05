@@ -76,6 +76,15 @@ fn fix_stdio_permissions(user: &User) -> Result<()> {
     Ok(())
 }
 
+fn ls<S: AsRef<Path>>(path: &S) {
+    println!("ls {:?}", path.as_ref());
+    for dir in std::fs::read_dir(path).unwrap() {
+        if let Ok(d) = dir {
+            println!("{:?}", d.path());
+        }
+    }
+}
+
 impl LinuxProcess {
     pub fn new(config: config::Config, command: Vec<String>) -> LinuxProcess {
         LinuxProcess {
@@ -120,6 +129,12 @@ impl LinuxProcess {
             let mut splitter = env_str.splitn(2, "=");
             std::env::set_var(splitter.next().unwrap(), splitter.next().unwrap());
         }
+
+        // unshare process group, so we can kill all processes forked from current at once.
+        setsid()?;
+        // we need root privilege (in host or in user namespace)
+        setuid(Uid::from_raw(0))?;
+        setgid(Gid::from_raw(0))?;
 
         self.setup_rootfs()?;
 
@@ -193,21 +208,60 @@ impl LinuxProcess {
 
     fn prepare_root(&self) -> Result<()> {
         let flag = if self.config.root_propagation != 0 {
-            match MsFlags::from_bits(self.config.root_propagation) {
-                Some(bit) => bit,
-                None => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "root_propagation is not valid",
-                    )
-                    .into())
-                }
-            }
+            MsFlags::from_bits(self.config.root_propagation).ok_or(
+                error::Error::InvalidRootfsPropagation(self.config.root_propagation),
+            )?
         } else {
             MsFlags::MS_SLAVE | MsFlags::MS_REC
         };
 
         mount::<str, str, str, str>(None, "/", None, flag, None)?;
+
+        // make parent mount private to make sure following bind mount does not
+        // propagate in other mount namespaces.
+        // And also this helps pivot_root.
+        {
+            let myself = procfs::process::Process::myself()?;
+            let absolute_rootfs = self.config.root.path.canonicalize()?;
+            let parent_mount = myself
+                .mountinfo()?
+                .into_iter()
+                .filter(|m| absolute_rootfs.starts_with(&m.mount_point))
+                .max_by(|a, b| {
+                    a.mount_point
+                        .as_os_str()
+                        .len()
+                        .cmp(&b.mount_point.as_os_str().len())
+                })
+                .ok_or(error::Error::NoParentMount {
+                    path: self.config.root.path.clone(),
+                })?;
+            let shared_mount = parent_mount.opt_fields.iter().any(|f| match f {
+                procfs::process::MountOptFields::Shared(_) => true,
+                _ => false,
+            });
+            if shared_mount {
+                // make parent mount private if it was shared. It is needed because
+                // firstly pivot_root will fail if parent mount is shared, secondly
+                // when we bind mount rootfs it will propagate to parent namespace
+                // unexpectedly.
+                mount::<str, PathBuf, str, str>(
+                    None,
+                    &parent_mount.mount_point,
+                    None,
+                    MsFlags::MS_PRIVATE,
+                    None,
+                )?;
+            }
+        }
+
+        mount::<PathBuf, PathBuf, str, str>(
+            Some(&self.config.root.path),
+            &self.config.root.path,
+            Some("bind"),
+            MsFlags::MS_BIND | MsFlags::MS_REC,
+            None,
+        )?;
 
         Ok(())
     }
@@ -227,6 +281,10 @@ impl LinuxProcess {
     }
 
     fn bind_device(&self, device: &config::Device, dest: &Path) -> Result<()> {
+        if !dest.exists() {
+            std::fs::File::create(dest)?;
+        }
+
         nix::mount::mount::<PathBuf, Path, str, str>(
             Some(&device.path),
             dest,
@@ -275,7 +333,7 @@ impl LinuxProcess {
     }
 
     fn create_device(&self, device: &config::Device, bind: bool) -> Result<()> {
-        let dest = self.config.root.path.join(&device.path);
+        let dest = join::secure_join(&self.config.root.path, &device.path)?;
         match dest.parent() {
             Some(parent) => std::fs::create_dir_all(parent)?,
             None => return Err(error::Error::InvalidDevicePath { path: dest }),
@@ -290,6 +348,65 @@ impl LinuxProcess {
         Ok(())
     }
 
+    fn default_devices(&self) -> Vec<config::Device> {
+        return vec![
+            config::Device {
+                kind: "c".into(),
+                path: "/dev/null".into(),
+                major: 1,
+                minor: 3,
+                file_mode: 0666,
+                uid: 0,
+                gid: 0,
+            },
+            config::Device {
+                kind: "c".into(),
+                path: "/dev/random".into(),
+                major: 1,
+                minor: 8,
+                file_mode: 0666,
+                uid: 0,
+                gid: 0,
+            },
+            config::Device {
+                kind: "c".into(),
+                path: "/dev/full".into(),
+                major: 1,
+                minor: 7,
+                file_mode: 0666,
+                uid: 0,
+                gid: 0,
+            },
+            config::Device {
+                kind: "c".into(),
+                path: "/dev/tty".into(),
+                major: 5,
+                minor: 0,
+                file_mode: 0666,
+                uid: 0,
+                gid: 0,
+            },
+            config::Device {
+                kind: "c".into(),
+                path: "/dev/zero".into(),
+                major: 1,
+                minor: 5,
+                file_mode: 0666,
+                uid: 0,
+                gid: 0,
+            },
+            config::Device {
+                kind: "c".into(),
+                path: "/dev/urandom".into(),
+                major: 1,
+                minor: 9,
+                file_mode: 0666,
+                uid: 0,
+                gid: 0,
+            },
+        ];
+    }
+
     fn create_devices(&self) -> Result<()> {
         let bind = system::is_running_in_user_namespace()
             || config_linux::has_namespace(&self.config, namespace::Namespace::User);
@@ -297,11 +414,24 @@ impl LinuxProcess {
         let mask = nix::sys::stat::umask(nix::sys::stat::Mode::empty());
         defer! { nix::sys::stat::umask(mask); }
 
-        for device in self.config.linux.devices.iter() {
+        let mut created = std::collections::HashSet::new();
+
+        for device in self
+            .config
+            .linux
+            .devices
+            .iter()
+            .chain(self.default_devices().iter())
+        {
             if device.path == PathBuf::from("/dev/ptmx") {
                 // Setup /dev/ptmx by setup_dev_ptmx
                 continue;
             }
+
+            if created.contains(&device.path) {
+                continue;
+            }
+            created.insert(device.path.clone());
 
             self.create_device(&device, bind)?;
         }
@@ -309,7 +439,7 @@ impl LinuxProcess {
         Ok(())
     }
 
-    fn setup_ptmx(&self) -> Result<()> {
+    fn setup_ptmx(&self) -> io::Result<()> {
         let dest = self.config.root.path.join("dev/ptmx");
         if dest.exists() {
             std::fs::remove_file(&dest)?;
@@ -322,18 +452,30 @@ impl LinuxProcess {
     fn setup_dev_symlinks(&self) -> Result<()> {
         let kcore: PathBuf = "/proc/kcore".into();
         if kcore.exists() {
-            std::os::unix::fs::symlink(kcore, self.config.root.path.join("dev/core"))?;
+            std::os::unix::fs::symlink(&kcore, self.config.root.path.join("dev/core")).map_err(
+                |e| error::Error::DevSymlinksFailure {
+                    src: kcore.into(),
+                    destination: self.config.root.path.join("dev/core"),
+                    error: e,
+                },
+            )?;
         }
         for link in [
-            ("/proc/self/fd", "/dev/fd"),
-            ("/proc/self/fd/0", "/dev/stdin"),
-            ("/proc/self/fd/1", "/dev/stdout"),
-            ("/proc/self/fd/2", "/dev/stderr"),
+            ("/proc/self/fd", "dev/fd"),
+            ("/proc/self/fd/0", "dev/stdin"),
+            ("/proc/self/fd/1", "dev/stdout"),
+            ("/proc/self/fd/2", "dev/stderr"),
         ]
         .iter()
         {
             // TODO: maybe we should ignore failure of linking to a existing file.
-            std::os::unix::fs::symlink(link.0, self.config.root.path.join(link.1))?;
+            std::os::unix::fs::symlink(link.0, self.config.root.path.join(link.1)).map_err(
+                |e| error::Error::DevSymlinksFailure {
+                    src: link.0.into(),
+                    destination: self.config.root.path.join(link.1),
+                    error: e,
+                },
+            )?;
         }
 
         Ok(())
@@ -397,11 +539,10 @@ impl LinuxProcess {
 
         if setup_dev {
             self.create_devices()?;
-            self.setup_ptmx()?;
+            self.setup_ptmx()
+                .map_err(|e| error::Error::DevPtmxFailure { error: e })?;
             self.setup_dev_symlinks()?;
         }
-
-        std::env::set_current_dir(&self.config.root.path)?;
 
         if config_linux::has_namespace(&self.config, namespace::Namespace::Mount) {
             self.pivot_root()?;
@@ -440,22 +581,27 @@ impl LinuxProcess {
         Ok(())
     }
 
-    fn enter_namespace(&self, ns: namespace::Namespace, path: Option<&String>) -> Result<()> {
+    fn enter_namespace(&self, ns: namespace::Namespace, path: Option<&String>) -> nix::Result<()> {
         let nstype = ns.to_clone_flag();
         match path {
-            None => {
-                nix::sched::unshare(nstype)?;
-            }
+            None => nix::sched::unshare(nstype),
             Some(path) => {
                 let fd = nix::fcntl::open(
                     path.as_str(),
                     nix::fcntl::OFlag::O_RDONLY,
                     nix::sys::stat::Mode::empty(),
                 )?;
-                nix::sched::setns(fd, nstype)?;
+                nix::sched::setns(fd, nstype)
             }
         }
-        Ok(())
+    }
+
+    fn update_map(&self, path: impl AsRef<Path>, map: &[config::IDMap]) -> io::Result<()> {
+        let maplines: Vec<String> = map
+            .iter()
+            .map(|m| format!("{} {} {}", m.container_id, m.host_id, m.size))
+            .collect();
+        std::fs::write(path.as_ref(), maplines.join("\n"))
     }
 
     fn setup_user_ns(&self) -> Result<()> {
@@ -466,7 +612,38 @@ impl LinuxProcess {
             };
             if ns == namespace::Namespace::User {
                 // we first unshare user namespace, so we may have root permission to do privileged operations.
-                self.enter_namespace(ns, namespace.path.as_ref())?;
+                if let Err(err) = self.enter_namespace(ns, namespace.path.as_ref()) {
+                    return Err(error::Error::UnshareNamespace {
+                        namespace: ns,
+                        error: err,
+                    });
+                }
+
+                if namespace.path.is_none() {
+                    // we only update uid/gid mappings when we are not joining an existing user namespace.
+                    if let Err(err) =
+                        self.update_map("/proc/self/uid_map", &self.config.linux.uid_mappings)
+                    {
+                        return Err(error::Error::UpdateUidMapping(err));
+                    }
+
+                    if !self.config.linux.gid_mappings.is_empty() {
+                        // since Linux 3.19, unprivilegd writing of /proc/self/gid_map has been disabled
+                        // uinless /proc/self/setgroups is written first to permanently disable the
+                        // ability to call set groups in that user namespace.
+                        let setgroups: PathBuf = "/proc/self/setgroups".into();
+                        if setgroups.exists() {
+                            if let Err(err) = std::fs::write(&setgroups, "deny") {
+                                return Err(error::Error::DenySetgroups(err));
+                            }
+                        }
+                        if let Err(err) =
+                            self.update_map("/proc/self/gid_map", &self.config.linux.gid_mappings)
+                        {
+                            return Err(error::Error::UpdateGidMapping(err));
+                        }
+                    }
+                }
             }
         }
 
@@ -488,7 +665,12 @@ impl LinuxProcess {
                 // we have already unshared user namespace in setup_user_ns.
                 continue;
             }
-            self.enter_namespace(ns, namespace.path.as_ref())?;
+            if let Err(err) = self.enter_namespace(ns, namespace.path.as_ref()) {
+                return Err(error::Error::UnshareNamespace {
+                    namespace: ns,
+                    error: err,
+                });
+            }
         }
 
         Ok(())
@@ -641,7 +823,7 @@ impl LinuxProcess {
         // TODO: set capabilities
 
         // preserve existing capabilities while we change users.
-        prctl::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0)?;
+        // prctl::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0)?;
 
         self.setup_user()?;
 

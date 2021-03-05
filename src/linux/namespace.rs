@@ -4,7 +4,7 @@ use std::convert::TryFrom;
 /// Namespace name to unshare
 ///
 /// See `man 7 namespaces` for more information
-#[derive(PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum Namespace {
     /// Unshare the mount namespace. It basically means that you can now mount
     /// and unmount folders without touching parent mount points.
@@ -103,7 +103,7 @@ impl std::fmt::Display for Namespace {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "{:?}",
+            "{}",
             match self {
                 Namespace::Mount => "mount",
                 Namespace::Uts => "uts",

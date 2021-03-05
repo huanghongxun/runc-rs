@@ -1,7 +1,6 @@
 use super::*;
 use nix::mount::*;
 use phf::phf_map;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 struct Flag {
@@ -101,14 +100,13 @@ impl Mount {
     }
 
     fn _mount(&self, mount_label: &str) -> Result<()> {
-        let output = std::process::Command::new("ls")
-            .args(&["-al", self.destination.parent().unwrap().to_str().unwrap()])
-            .output()?;
-        std::io::stdout().write_all(&output.stdout).unwrap();
-        std::io::stderr().write_all(&output.stderr).unwrap();
-
-        println!("Mounting {:?} {:?}", self.source, self.destination);
-        mount(
+        // system!("cat /proc/self/mountinfo");
+        // system!(format!("mkdir -p {}", self.destination.to_str().unwrap()));
+        // system!(format!(
+        //     "ls -al {}",
+        //     self.destination.parent().unwrap().to_str().unwrap()
+        // ));
+        if let Err(err) = mount(
             self.source.as_ref(),
             &self.destination,
             if self.device == "" {
@@ -118,16 +116,28 @@ impl Mount {
             },
             self.flags,
             Some(selinux::format_mount_label(self.data.join(",").as_str(), mount_label).as_str()),
-        )?;
+        ) {
+            return Err(error::Error::Mount {
+                path: self.destination.to_path_buf(),
+                error: err,
+            });
+        }
 
         for propagation_flag in self.propagation_flags.iter() {
-            mount::<str, PathBuf, str, str>(
+            if let Err(err) = mount::<str, PathBuf, str, str>(
                 None,
                 &self.destination,
                 None,
                 *propagation_flag,
                 None,
-            )?;
+            ) {
+                {
+                    return Err(error::Error::MountPropagation {
+                        path: self.destination.to_path_buf(),
+                        error: err,
+                    });
+                }
+            }
         }
 
         Ok(())
@@ -252,7 +262,7 @@ impl Mount {
         Ok(())
     }
 
-    fn remount(&self) -> Result<()> {
+    fn remount(&self) -> nix::Result<()> {
         mount::<PathBuf, PathBuf, str, str>(
             self.source.as_ref(),
             &self.destination,
@@ -270,11 +280,16 @@ impl Mount {
                 path: path.to_path_buf(),
             })
         } else {
-            Ok(())
+            std::fs::create_dir_all(path).map_err(|e| error::Error::MountpointCreateDirectories {
+                path: path.to_path_buf(),
+                error: e,
+            })
         }
     }
 
     pub fn mount(&self, mount_label: &str, in_cgroup_namespace: bool) -> Result<()> {
+        println!("Mounting {:?} {:?}", self.source, self.destination);
+
         match self.device.as_str() {
             "proc" | "sysfs" => {
                 self.create_dir_all(&self.destination)?;
@@ -291,11 +306,20 @@ impl Mount {
                 self._mount(mount_label)?;
 
                 // restore permission after mounting.
-                std::fs::set_permissions(&self.destination, perms)?;
+                std::fs::set_permissions(&self.destination, perms).map_err(|e| {
+                    error::Error::MountpointPermission {
+                        path: self.destination.clone(),
+                        error: e,
+                    }
+                })?;
 
                 if self.flags & MsFlags::MS_RDONLY != MsFlags::empty() {
                     // _mount mounts tmpfs rw, remount here.
-                    self.remount()?;
+                    self.remount()
+                        .map_err(|e| error::Error::MountpointRemountReadonly {
+                            path: self.destination.clone(),
+                            error: e,
+                        })?;
                 }
             }
             "bind" => {
@@ -305,7 +329,11 @@ impl Mount {
                 if self.flags & !(MsFlags::MS_REC | MsFlags::MS_REMOUNT | MsFlags::MS_BIND)
                     != MsFlags::empty()
                 {
-                    self.remount()?;
+                    self.remount()
+                        .map_err(|e| error::Error::MountpointRemountReadonly {
+                            path: self.destination.clone(),
+                            error: e,
+                        })?;
                 }
             }
             "cgroup" => {

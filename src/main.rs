@@ -11,7 +11,7 @@ extern crate scopeguard;
 
 use clap::{App, Arg};
 
-fn main() {
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let matches = App::new("runguard")
         .author("huangyuhui <i@huangyuhui.net>")
         .about(
@@ -48,7 +48,8 @@ fn main() {
         toml::from_str(config_str.as_str()).expect("Configuration unparsable");
 
     if cfg!(target_os = "linux") {
-        linux::run(&config, matches.values_of("commands").unwrap().collect());
+        linux::run(&config, matches.values_of("commands").unwrap().collect())?;
+        Ok(())
     } else {
         eprintln!("Unsupported operating system");
         std::process::exit(1);

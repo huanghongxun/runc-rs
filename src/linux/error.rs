@@ -1,3 +1,5 @@
+use super::*;
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(thiserror::Error, Debug)]
@@ -10,9 +12,6 @@ pub enum Error {
     Proc(#[from] procfs::ProcError),
     #[error("seccomp error")]
     Seccomp(#[from] super::seccomp::SeccompError),
-
-    #[error("filesystem {path:?} must be mounted on ordinary directory")]
-    MountpointNotDirectory { path: std::path::PathBuf },
 
     #[error("Expected working directory {path:?}, but not a directory")]
     CwdNotDirectory { path: std::path::PathBuf },
@@ -38,7 +37,7 @@ pub enum Error {
     #[error("invalid namespace")]
     InvalidNamespace(String),
 
-    #[error("invalid device path")]
+    #[error("invalid device path {path:?}")]
     InvalidDevicePath { path: std::path::PathBuf },
 
     #[error("invalid device type")]
@@ -50,9 +49,9 @@ pub enum Error {
     #[error("invalid device mode")]
     InvalidDeviceMode { path: std::path::PathBuf, mode: u32 },
 
-    #[error("invalid seccomp action")]
+    #[error("invalid seccomp action {action:}")]
     InvalidSeccompAction { action: String },
-    #[error("invalid seccomp op")]
+    #[error("invalid seccomp op {op:}")]
     InvalidSeccompOp { op: String },
     #[error("invalid seccomp nr")]
     InvalidSeccompNr,
@@ -63,4 +62,58 @@ pub enum Error {
         value_two: Option<u64>,
         op: String,
     },
+
+    #[error("an error occurred when linking /dev/ptmx")]
+    DevPtmxFailure { error: std::io::Error },
+
+    #[error("an error occurred when creating symlinks to {destination:?}")]
+    DevSymlinksFailure {
+        src: std::path::PathBuf,
+        destination: std::path::PathBuf,
+        error: std::io::Error,
+    },
+
+    #[error("an error occurred when mounting {path:?}")]
+    Mount {
+        path: std::path::PathBuf,
+        error: nix::Error,
+    },
+    #[error("an error occured when setting permission of mountpoint {path:?}")]
+    MountpointPermission {
+        path: std::path::PathBuf,
+        error: std::io::Error,
+    },
+    #[error("filesystem {path:?} must be mounted on ordinary directory")]
+    MountpointNotDirectory { path: std::path::PathBuf },
+    #[error("an error ocurred when creating directory for mounting {path:?}")]
+    MountpointCreateDirectories {
+        path: std::path::PathBuf,
+        error: std::io::Error,
+    },
+    #[error("an error ocurred when remounting mountpoint as readonly")]
+    MountpointRemountReadonly {
+        path: std::path::PathBuf,
+        error: nix::Error,
+    },
+    #[error("an error ocurred when adjusting mounting propagation flags")]
+    MountPropagation {
+        path: std::path::PathBuf,
+        error: nix::Error,
+    },
+    #[error("invalid rootfs propagation flag")]
+    InvalidRootfsPropagation(u64),
+    #[error("cannot find parent mount of {path:?}")]
+    NoParentMount { path: std::path::PathBuf },
+
+    #[error("an error occurred when unsharing {namespace:}")]
+    UnshareNamespace {
+        namespace: namespace::Namespace,
+        error: nix::Error,
+    },
+    #[error("an error occurred when deny setgroups syscall.")]
+    DenySetgroups(std::io::Error),
+    #[error("an error occurred when update uid mapping.")]
+    UpdateUidMapping(std::io::Error),
+    #[error("an error occurred when update gid mapping.")]
+    UpdateGidMapping(std::io::Error),
 }

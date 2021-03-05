@@ -42,3 +42,13 @@ pub fn parse_id_map<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<config::ID
 
     Ok(result)
 }
+
+#[macro_export]
+macro_rules! system {
+    ($p:expr) => {
+        use nix::NixPath;
+        $p.with_nix_path(|t| unsafe {
+            libc::system(t.as_ptr());
+        });
+    };
+}

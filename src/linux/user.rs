@@ -13,6 +13,14 @@ pub struct User {
     pub home: String,
     pub shell: String,
 }
+macro_rules! system {
+    ($p:expr) => {
+        use nix::NixPath;
+        $p.with_nix_path(|t| unsafe {
+            libc::system(t.as_ptr());
+        });
+    };
+}
 
 impl User {
     pub fn find_user(uid: Uid, gid: Gid) -> io::Result<User> {
@@ -33,6 +41,7 @@ impl User {
 
     pub fn parse_from_file(passwd_path: &str) -> io::Result<Vec<User>> {
         let mut result: Vec<User> = Vec::new();
+
         let file = File::open(passwd_path)?;
         for line in io::BufReader::new(file).lines() {
             let ok_line = line?;
@@ -101,7 +110,7 @@ impl Group {
                         ))
                     }
                 },
-                users: String::from(splitted[4])
+                users: String::from(splitted[3])
                     .split(":")
                     .map(|s| String::from(s))
                     .collect::<Vec<String>>(),
