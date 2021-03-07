@@ -24,6 +24,9 @@ pub struct Config {
 
     #[serde(default)]
     pub linux: Linux,
+
+    #[serde(default)]
+    pub limits: Limits,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -297,4 +300,11 @@ pub struct DeviceResource {
     pub minor: Option<i64>,
     /// Sequence of `'r'`, `'w'` or `'m'`, each denoting read, write or mknod permissions.
     pub access: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Limits {
+    pub wall_limit: Option<f64>,
+
+    pub cpu_limit: Option<f64>,
 }

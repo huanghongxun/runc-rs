@@ -94,12 +94,60 @@ fn collect_status(
     signal: Option<Signal>,
     wall_time: Duration,
 ) {
-    println!("Run {:?} {:?} {:?}", exitcode, signal, wall_time);
+    let mut cpu_time = 0.0;
+    let mut oom = false;
+    let mut tle = false;
     if let Some(cgroup) = &process.cgroup {
-        let mem: &cgroups_rs::memory::MemController = cgroup
-            .controller_of()
-            .expect("Memory controller is required");
-        let memstat = mem.memory_stat();
-        println!("Memory {}", memstat.max_usage_in_bytes);
+        if let Some(mem) = cgroup.controller_of::<cgroups_rs::memory::MemController>() {
+            let memstat = mem.memory_stat();
+            println!("memory-bytes: {}", memstat.max_usage_in_bytes);
+
+            if memstat.oom_control.oom_kill > 0 {
+                oom = true;
+            }
+        }
+        if let Some(cpuacct) = cgroup.controller_of::<cgroups_rs::cpuacct::CpuAcctController>() {
+            let acct = cpuacct.cpuacct();
+            println!("user-time: {}", acct.usage_user as f64 / 1e9);
+            println!("sys-time: {}", acct.usage_sys as f64 / 1e9);
+            println!("cpu-time: {}", acct.usage as f64 / 1e9);
+
+            cpu_time = acct.usage as f64 / 1e9;
+            if let Some(limit) = config.limits.cpu_limit {
+                if cpu_time > limit {
+                    tle = true;
+                }
+            }
+        }
+    }
+
+    println!("wall-time: {}", wall_time.as_secs_f64());
+    println!("exit-code: {}", exitcode);
+
+    if let Some(limit) = config.limits.wall_limit {
+        if wall_time.as_secs_f64() > limit {
+            tle = true;
+        }
+    } else if let Some(limit) = config.limits.cpu_limit {
+        // wall_limit is assumed as triple of cpu_limit
+        if wall_time.as_secs_f64() > 3.0 * limit {
+            tle = true;
+        }
+    }
+
+    if let Some(sig) = signal {
+        println!("signal: {}", sig as libc::c_int);
+    }
+
+    if oom {
+        println!("memory-result: oom");
+    } else {
+        println!("memory-result:");
+    }
+
+    if tle {
+        println!("time-result: hard-timelimit");
+    } else {
+        println!("time-result:");
     }
 }

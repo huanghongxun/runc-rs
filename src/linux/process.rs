@@ -127,9 +127,6 @@ impl LinuxProcess {
             std::env::set_var(splitter.next().unwrap(), splitter.next().unwrap());
         }
 
-        // enters cgroup in child, to make sure the operation is done before execvp.
-        self.enter_cgroups()?;
-
         // unshare process group, so we can kill all processes forked from current at once.
         setsid()?;
         // we need root privilege (in host or in user namespace)
@@ -154,6 +151,11 @@ impl LinuxProcess {
         }
 
         self.finalize_namespace()?;
+
+        // We must postpone cgroup setup as close to execvp as possible, so cpu time
+        // will be more accurate.
+        // enters cgroup in child, to make sure the operation is done before execvp.
+        self.enter_cgroups()?;
 
         // With no new privileges, we must postpone seccomp as close to
         // execvp as possible, so as few syscalls take place afterward.
