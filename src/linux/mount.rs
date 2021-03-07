@@ -337,7 +337,7 @@ impl Mount {
                 }
             }
             "cgroup" => {
-                if cgroup::is_cgroup_v2_unified_mode() {
+                if cgroups_rs::hierarchies::is_cgroup2_unified_mode() {
                     self.mount_cgroup_v2(mount_label)?;
                 } else {
                     self.mount_cgroup_v1(mount_label, in_cgroup_namespace)?;

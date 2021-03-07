@@ -12,6 +12,8 @@ pub enum Error {
     Proc(#[from] procfs::ProcError),
     #[error("seccomp error")]
     Seccomp(#[from] super::seccomp::SeccompError),
+    #[error("cgroup error")]
+    Cgroup(#[from] cgroups_rs::error::Error),
 
     #[error("Expected working directory {path:?}, but not a directory")]
     CwdNotDirectory { path: std::path::PathBuf },
@@ -116,4 +118,7 @@ pub enum Error {
     UpdateUidMapping(std::io::Error),
     #[error("an error occurred when update gid mapping.")]
     UpdateGidMapping(std::io::Error),
+
+    #[error("an error occurred when killing process {pid:}")]
+    Kill { pid: libc::pid_t, error: nix::Error },
 }

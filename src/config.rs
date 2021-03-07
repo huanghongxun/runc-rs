@@ -180,10 +180,8 @@ pub struct Seccomp {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Syscall {
-    #[serde(default)]
     pub names: Option<Vec<String>>,
 
-    #[serde(default)]
     pub nr: Option<usize>,
 
     pub action: String,
@@ -214,34 +212,32 @@ pub struct Namespace {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Resources {
-    pub memory: Option<Memory>,
+    pub memory: Option<MemoryResources>,
 
-    pub cpu: Option<CPU>,
+    pub cpu: Option<CPUResources>,
 
-    pub pids: Option<PIDs>,
+    pub pids: Option<PIDResources>,
+
+    #[serde(default)]
+    pub devices: Vec<DeviceResource>,
 
     pub unified: Option<HashMap<String, String>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct Memory {
-    #[serde(default)]
-    pub limit: i64,
+pub struct MemoryResources {
+    pub limit: Option<i64>,
 
-    #[serde(default)]
-    pub reservation: i64,
+    pub reservation: Option<i64>,
 
-    #[serde(default)]
-    pub swap: i64,
+    pub swap: Option<i64>,
 
-    #[serde(default)]
-    pub kernel: i64,
+    pub kernel: Option<i64>,
 
-    #[serde(default, alias = "kernelTCP")]
-    pub kernel_tcp: i64,
+    #[serde(alias = "kernelTCP")]
+    pub kernel_tcp: Option<i64>,
 
-    #[serde(default)]
-    pub swappiness: u64,
+    pub swappiness: Option<u64>,
 
     #[serde(default, alias = "disableOOMKiller")]
     pub disable_oom_killer: u64,
@@ -251,31 +247,54 @@ pub struct Memory {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct CPU {
-    #[serde(default)]
-    pub shares: u64,
+pub struct CPUResources {
+    pub shares: Option<u64>,
 
-    #[serde(default)]
-    pub quota: i64,
+    pub quota: Option<i64>,
 
-    #[serde(default)]
-    pub period: u64,
+    pub period: Option<u64>,
 
-    #[serde(default, alias = "realtimeRuntime")]
-    pub realtime_runtime: i64,
+    #[serde(alias = "realtimeRuntime")]
+    pub realtime_runtime: Option<i64>,
 
-    #[serde(default, alias = "realtimePeriod")]
-    pub realtime_period: u64,
+    #[serde(alias = "realtimePeriod")]
+    pub realtime_period: Option<u64>,
 
-    #[serde(default)]
-    pub cpus: String,
+    pub cpus: Option<String>,
 
-    #[serde(default)]
-    pub mems: String,
+    pub mems: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct PIDs {
-    #[serde(default)]
-    pub limit: u64,
+pub struct PIDResources {
+    pub limit: Option<i64>,
+}
+
+/// An enum holding the different types of devices that can be manipulated using this controller.
+#[derive(Clone, Debug, Deserialize)]
+pub enum DeviceType {
+    /// The rule applies to all devices.
+    #[serde(rename = "a")]
+    All,
+    /// The rule only applies to character devices.
+    #[serde(rename = "c")]
+    Char,
+    /// The rule only applies to block devices.
+    #[serde(rename = "b")]
+    Block,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct DeviceResource {
+    /// If true, access to the device is allowed, otherwise it's denied.
+    pub allow: bool,
+    /// `'c'` for character device, `'b'` for block device; or `'a'` for all devices.
+    #[serde(alias = "type")]
+    pub kind: DeviceType,
+    /// The major number of the device.
+    pub major: Option<i64>,
+    /// The minor number of the device.
+    pub minor: Option<i64>,
+    /// Sequence of `'r'`, `'w'` or `'m'`, each denoting read, write or mknod permissions.
+    pub access: Option<String>,
 }

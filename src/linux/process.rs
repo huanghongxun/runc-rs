@@ -76,21 +76,14 @@ fn fix_stdio_permissions(user: &User) -> Result<()> {
     Ok(())
 }
 
-fn ls<S: AsRef<Path>>(path: &S) {
-    println!("ls {:?}", path.as_ref());
-    for dir in std::fs::read_dir(path).unwrap() {
-        if let Ok(d) = dir {
-            println!("{:?}", d.path());
-        }
-    }
-}
-
 impl LinuxProcess {
-    pub fn new(config: config::Config, command: Vec<String>) -> LinuxProcess {
+    pub fn new(name: String, config: config::Config, command: Vec<String>) -> LinuxProcess {
         LinuxProcess {
+            name,
             config,
             command,
             pid: None,
+            cgroup: None,
             status: ProcessStatus::Ready,
         }
     }
@@ -102,6 +95,9 @@ impl LinuxProcess {
     pub fn start(&mut self) -> Result<()> {
         self.setup_ns()?;
 
+        // setup cgroups in parent, so we can collect information from cgroup statistics.
+        let cgroups = self.setup_cgroups()?;
+
         unsafe {
             match fork()? {
                 ForkResult::Parent { child, .. } => {
@@ -109,12 +105,12 @@ impl LinuxProcess {
                     self.status = ProcessStatus::Running;
                     Ok(())
                 }
-                ForkResult::Child => self.child(),
+                ForkResult::Child => self.child(cgroups.as_ref()),
             }
         }
     }
 
-    fn child(&self) -> Result<()> {
+    fn child(&self, cgroups: Option<&cgroups_rs::Cgroup>) -> Result<()> {
         let path = CString::new(self.command[0].as_str()).expect("CString::new failed");
         let cstr_args: Vec<CString> = self
             .command
@@ -128,6 +124,11 @@ impl LinuxProcess {
             let env_str = env.to_string();
             let mut splitter = env_str.splitn(2, "=");
             std::env::set_var(splitter.next().unwrap(), splitter.next().unwrap());
+        }
+
+        // enters cgroup in child, to make sure the operation is done before execvp.
+        if let Some(c) = &cgroups {
+            c.add_task((nix::unistd::gettid().as_raw() as u64).into())?;
         }
 
         // unshare process group, so we can kill all processes forked from current at once.
@@ -171,7 +172,28 @@ impl LinuxProcess {
             return Ok(());
         }
 
-        kill(self.pid.unwrap(), signal)?;
+        match &self.cgroup {
+            Some(cgroup) => {
+                let mut result = Ok(());
+                // if cgroups is enabled, find all processes to kill by cgroup.procs.
+                for task in cgroup.tasks().iter() {
+                    // try to kill all processes, instead of reporting error immediately.
+                    if let Err(err) =
+                        kill(nix::unistd::Pid::from_raw(task.pid as libc::pid_t), signal)
+                    {
+                        result = Err(error::Error::Kill {
+                            pid: task.pid as libc::pid_t,
+                            error: err,
+                        })
+                    }
+                }
+                return result;
+            }
+            None => {
+                // if cgroups is not initialized, fallback to kill process cgroup.
+                kill(self.pid.unwrap(), signal)?;
+            }
+        }
 
         Ok(())
     }
@@ -676,6 +698,67 @@ impl LinuxProcess {
         Ok(())
     }
 
+    /// Create cgroups specified in configuration.
+    fn setup_cgroups(&self) -> Result<Option<cgroups_rs::Cgroup>> {
+        if let Some(config_resources) = &self.config.linux.resources {
+            let hier = cgroups_rs::hierarchies::auto();
+            let cgroup = cgroups_rs::Cgroup::new(hier, &self.name);
+            let mut resources = cgroups_rs::Resources::default();
+
+            if let Some(memory) = &config_resources.memory {
+                resources.memory.memory_soft_limit = memory.reservation;
+                resources.memory.memory_hard_limit = memory.limit;
+                resources.memory.memory_swap_limit = memory.swap;
+                resources.memory.kernel_memory_limit = memory.kernel;
+                resources.memory.kernel_tcp_memory_limit = memory.kernel_tcp;
+                resources.memory.swappiness = memory.swappiness;
+            }
+            if let Some(cpu) = &config_resources.cpu {
+                resources.cpu.shares = cpu.shares;
+                resources.cpu.quota = cpu.quota;
+                resources.cpu.period = cpu.period;
+                resources.cpu.realtime_runtime = cpu.realtime_runtime;
+                resources.cpu.realtime_period = cpu.realtime_period;
+                resources.cpu.cpus = cpu.cpus.clone();
+                resources.cpu.mems = cpu.mems.clone();
+            }
+            if let Some(pids) = &config_resources.pids {
+                resources.pid.maximum_number_of_processes =
+                    pids.limit.map(|limit| cgroups_rs::MaxValue::Value(limit));
+            }
+            resources.devices.devices = config_resources
+                .devices
+                .iter()
+                .map(|d| cgroups_rs::DeviceResource {
+                    allow: d.allow,
+                    devtype: match &d.kind {
+                        config::DeviceType::All => cgroups_rs::devices::DeviceType::All,
+                        config::DeviceType::Char => cgroups_rs::devices::DeviceType::Char,
+                        config::DeviceType::Block => cgroups_rs::devices::DeviceType::Block,
+                    },
+                    major: d.major.unwrap_or(0),
+                    minor: d.minor.unwrap_or(0),
+                    access: match &d.access {
+                        Some(access) => access
+                            .chars()
+                            .filter_map(|a| match a {
+                                'r' => Some(cgroups_rs::devices::DevicePermissions::Read),
+                                'w' => Some(cgroups_rs::devices::DevicePermissions::Write),
+                                'm' => Some(cgroups_rs::devices::DevicePermissions::MkNod),
+                                _ => None,
+                            })
+                            .collect(),
+                        None => vec![],
+                    },
+                })
+                .collect();
+            cgroup.apply(&resources)?;
+            Ok(Some(cgroup))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn setup_hostname(&self) -> Result<()> {
         sethostname(self.config.hostname.as_str())?;
         Ok(())
@@ -866,5 +949,13 @@ impl LinuxProcess {
         }
 
         Ok(())
+    }
+}
+
+impl Drop for LinuxProcess {
+    fn drop(&mut self) {
+        if let Some(cgroup) = &self.cgroup {
+            cgroup.delete();
+        }
     }
 }
