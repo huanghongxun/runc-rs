@@ -15,6 +15,9 @@ pub enum Error {
     #[error("cgroup error")]
     Cgroup(#[from] cgroups_rs::error::Error),
 
+    #[error("rootfs {path:?} not found or not a directory")]
+    RootfsNotDirectory { path: std::path::PathBuf },
+
     #[error("Expected working directory {path:?}, but not a directory")]
     CwdNotDirectory { path: std::path::PathBuf },
 

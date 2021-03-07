@@ -1,8 +1,6 @@
 use super::*;
 use cgroups_rs::hierarchies::*;
 
-static UNIFIED_INIT: once_cell::sync::OnceCell<bool> = once_cell::sync::OnceCell::new();
-
 pub fn get_all_subsystems() -> Result<Vec<String>> {
     if is_cgroup2_unified_mode() {
         let controllers = std::fs::read_to_string("/sys/fs/cgroup/cgroup.controllers")?;

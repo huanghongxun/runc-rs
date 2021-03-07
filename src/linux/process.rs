@@ -6,6 +6,7 @@ use super::*;
 use crate::config;
 use crate::linux::prctl::prctl;
 use crate::process::ProcessStatus;
+use cgroups_rs::Controller;
 use nix::mount::*;
 use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::{waitpid, WaitStatus};
@@ -96,7 +97,7 @@ impl LinuxProcess {
         self.setup_ns()?;
 
         // setup cgroups in parent, so we can collect information from cgroup statistics.
-        let cgroups = self.setup_cgroups()?;
+        self.cgroup = self.setup_cgroups()?;
 
         unsafe {
             match fork()? {
@@ -105,12 +106,12 @@ impl LinuxProcess {
                     self.status = ProcessStatus::Running;
                     Ok(())
                 }
-                ForkResult::Child => self.child(cgroups.as_ref()),
+                ForkResult::Child => self.child(),
             }
         }
     }
 
-    fn child(&self, cgroups: Option<&cgroups_rs::Cgroup>) -> Result<()> {
+    fn child(&self) -> Result<()> {
         let path = CString::new(self.command[0].as_str()).expect("CString::new failed");
         let cstr_args: Vec<CString> = self
             .command
@@ -127,9 +128,7 @@ impl LinuxProcess {
         }
 
         // enters cgroup in child, to make sure the operation is done before execvp.
-        if let Some(c) = &cgroups {
-            c.add_task((nix::unistd::gettid().as_raw() as u64).into())?;
-        }
+        self.enter_cgroups()?;
 
         // unshare process group, so we can kill all processes forked from current at once.
         setsid()?;
@@ -229,6 +228,12 @@ impl LinuxProcess {
     }
 
     fn prepare_root(&self) -> Result<()> {
+        if !self.config.root.path.is_dir() {
+            return Err(error::Error::RootfsNotDirectory {
+                path: self.config.root.path.clone(),
+            });
+        }
+
         let flag = if self.config.root_propagation != 0 {
             MsFlags::from_bits(self.config.root_propagation).ok_or(
                 error::Error::InvalidRootfsPropagation(self.config.root_propagation),
@@ -702,7 +707,22 @@ impl LinuxProcess {
     fn setup_cgroups(&self) -> Result<Option<cgroups_rs::Cgroup>> {
         if let Some(config_resources) = &self.config.linux.resources {
             let hier = cgroups_rs::hierarchies::auto();
-            let cgroup = cgroups_rs::Cgroup::new(hier, &self.name);
+
+            let relative_paths: std::collections::HashMap<String, String> =
+                procfs::process::Process::myself()?
+                    .cgroups()?
+                    .into_iter()
+                    .flat_map(|p| {
+                        let pathname = &p.pathname;
+                        p.controllers
+                            .into_iter()
+                            .map(|c| (c, pathname.clone()))
+                            .collect::<Vec<(String, String)>>()
+                    })
+                    .collect();
+
+            let cgroup =
+                cgroups_rs::Cgroup::new_with_relative_paths(hier, &self.name, relative_paths);
             let mut resources = cgroups_rs::Resources::default();
 
             if let Some(memory) = &config_resources.memory {
@@ -712,6 +732,11 @@ impl LinuxProcess {
                 resources.memory.kernel_memory_limit = memory.kernel;
                 resources.memory.kernel_tcp_memory_limit = memory.kernel_tcp;
                 resources.memory.swappiness = memory.swappiness;
+                if let Some(controller) =
+                    cgroup.controller_of::<cgroups_rs::memory::MemController>()
+                {
+                    controller.apply(&resources)?;
+                }
             }
             if let Some(cpu) = &config_resources.cpu {
                 resources.cpu.shares = cpu.shares;
@@ -721,42 +746,91 @@ impl LinuxProcess {
                 resources.cpu.realtime_period = cpu.realtime_period;
                 resources.cpu.cpus = cpu.cpus.clone();
                 resources.cpu.mems = cpu.mems.clone();
+                if let Some(controller) = cgroup.controller_of::<cgroups_rs::cpu::CpuController>() {
+                    controller.apply(&resources)?;
+                }
             }
             if let Some(pids) = &config_resources.pids {
                 resources.pid.maximum_number_of_processes =
                     pids.limit.map(|limit| cgroups_rs::MaxValue::Value(limit));
+                if let Some(controller) = cgroup.controller_of::<cgroups_rs::pid::PidController>() {
+                    controller.apply(&resources)?;
+                }
             }
-            resources.devices.devices = config_resources
-                .devices
-                .iter()
-                .map(|d| cgroups_rs::DeviceResource {
-                    allow: d.allow,
-                    devtype: match &d.kind {
-                        config::DeviceType::All => cgroups_rs::devices::DeviceType::All,
-                        config::DeviceType::Char => cgroups_rs::devices::DeviceType::Char,
-                        config::DeviceType::Block => cgroups_rs::devices::DeviceType::Block,
-                    },
-                    major: d.major.unwrap_or(0),
-                    minor: d.minor.unwrap_or(0),
-                    access: match &d.access {
-                        Some(access) => access
-                            .chars()
-                            .filter_map(|a| match a {
-                                'r' => Some(cgroups_rs::devices::DevicePermissions::Read),
-                                'w' => Some(cgroups_rs::devices::DevicePermissions::Write),
-                                'm' => Some(cgroups_rs::devices::DevicePermissions::MkNod),
-                                _ => None,
-                            })
-                            .collect(),
-                        None => vec![],
-                    },
-                })
-                .collect();
-            cgroup.apply(&resources)?;
+            if !config_resources.devices.is_empty() {
+                resources.devices.devices = config_resources
+                    .devices
+                    .iter()
+                    .map(|d| cgroups_rs::DeviceResource {
+                        allow: d.allow,
+                        devtype: match &d.kind {
+                            config::DeviceType::All => cgroups_rs::devices::DeviceType::All,
+                            config::DeviceType::Char => cgroups_rs::devices::DeviceType::Char,
+                            config::DeviceType::Block => cgroups_rs::devices::DeviceType::Block,
+                        },
+                        major: d.major.unwrap_or(0),
+                        minor: d.minor.unwrap_or(0),
+                        access: match &d.access {
+                            Some(access) => access
+                                .chars()
+                                .filter_map(|a| match a {
+                                    'r' => Some(cgroups_rs::devices::DevicePermissions::Read),
+                                    'w' => Some(cgroups_rs::devices::DevicePermissions::Write),
+                                    'm' => Some(cgroups_rs::devices::DevicePermissions::MkNod),
+                                    _ => None,
+                                })
+                                .collect(),
+                            None => vec![],
+                        },
+                    })
+                    .collect();
+                if let Some(controller) =
+                    cgroup.controller_of::<cgroups_rs::devices::DevicesController>()
+                {
+                    controller.apply(&resources)?;
+                }
+            }
             Ok(Some(cgroup))
         } else {
             Ok(None)
         }
+    }
+
+    fn enter_cgroups(&self) -> Result<()> {
+        let pid = (nix::unistd::gettid().as_raw() as u64).into();
+        if let Some(cgroup) = &self.cgroup {
+            if let Some(config_resources) = &self.config.linux.resources {
+                if let Some(_) = &config_resources.memory {
+                    if let Some(controller) =
+                        cgroup.controller_of::<cgroups_rs::memory::MemController>()
+                    {
+                        controller.add_task(&pid)?;
+                    }
+                }
+                if let Some(_) = &config_resources.cpu {
+                    if let Some(controller) =
+                        cgroup.controller_of::<cgroups_rs::cpu::CpuController>()
+                    {
+                        controller.add_task(&pid)?;
+                    }
+                }
+                if let Some(_) = &config_resources.pids {
+                    if let Some(controller) =
+                        cgroup.controller_of::<cgroups_rs::pid::PidController>()
+                    {
+                        controller.add_task(&pid)?;
+                    }
+                }
+                if !config_resources.devices.is_empty() {
+                    if let Some(controller) =
+                        cgroup.controller_of::<cgroups_rs::devices::DevicesController>()
+                    {
+                        controller.add_task(&pid)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn setup_hostname(&self) -> Result<()> {

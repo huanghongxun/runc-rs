@@ -288,8 +288,6 @@ impl Mount {
     }
 
     pub fn mount(&self, mount_label: &str, in_cgroup_namespace: bool) -> Result<()> {
-        println!("Mounting {:?} {:?}", self.source, self.destination);
-
         match self.device.as_str() {
             "proc" | "sysfs" => {
                 self.create_dir_all(&self.destination)?;
