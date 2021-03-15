@@ -14,6 +14,8 @@ pub enum Error {
     Seccomp(#[from] super::seccomp::SeccompError),
     #[error("cgroup error")]
     Cgroup(#[from] cgroups_rs::error::Error),
+    #[error("systemd bus error")]
+    SystemdBus(#[from] ::systemd::bus::Error),
 
     #[error("rootfs {path:?} not found or not a directory")]
     RootfsNotDirectory { path: std::path::PathBuf },
@@ -124,4 +126,21 @@ pub enum Error {
 
     #[error("an error occurred when killing process {pid:}")]
     Kill { pid: libc::pid_t, error: nix::Error },
+
+    #[error("failed to detect user dbus connection to systemd")]
+    DbusAddressNotFound,
+
+    #[error("failed to detect owner uid")]
+    DetectUID,
+
+    #[error("an error occurred when executing process {command:?}")]
+    ProcessError {
+        command: String,
+        error: std::io::Error,
+    },
+    #[error("an error occurred when reading process output")]
+    ProcessOutputNotUtf8 {
+        command: String,
+        error: std::string::FromUtf8Error,
+    },
 }

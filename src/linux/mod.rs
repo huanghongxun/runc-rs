@@ -8,6 +8,7 @@ mod prctl;
 mod process;
 mod seccomp;
 mod selinux;
+mod systemd;
 #[macro_use]
 mod system;
 mod user;

@@ -1,6 +1,3 @@
-extern crate libc;
-extern crate seccomp_sys;
-
 use seccomp_sys::scmp_compare::*;
 use seccomp_sys::*;
 use std::convert::Into;
