@@ -9,6 +9,16 @@ extern crate scopeguard;
 
 use clap::{App, Arg};
 
+fn parse_config(config_str: &str) -> config::Config {
+    if let Ok(x) = toml::from_str(config_str) {
+        return x;
+    } else if let Ok(x) = serde_json::from_str(config_str) {
+        return x;
+    } else {
+        panic!("Configuration unparsable");
+    }
+}
+
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let matches = App::new("runguard")
         .author("huangyuhui <i@huangyuhui.net>")
@@ -42,8 +52,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         unreachable!()
     };
 
-    let config: config::Config =
-        toml::from_str(config_str.as_str()).expect("Configuration unparsable");
+    let config: config::Config = parse_config(&config_str);
 
     if cfg!(target_os = "linux") {
         linux::run(&config, matches.values_of("commands").unwrap().collect())?;

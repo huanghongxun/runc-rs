@@ -19,29 +19,31 @@ static PATH: &str = "/org/freedesktop/systemd1";
 static INTERFACE: &str = "org.freedesktop.systemd1.Manager";
 
 impl SystemdBus {
-    fn start_transient_unit(&self, name: &str, mode: &str, properties: &[Property]) {}
+    // fn start_transient_unit(&self, name: &str, mode: &str, properties: &[Property]) {}
 
     fn start_job(
         &mut self,
-        message: Message,
+        message: &mut Message,
         usec: u64,
         f: Box<dyn FnOnce(String) -> ()>,
     ) -> error::Result<()> {
-        let reply = message.call(usec)?;
+        unsafe {
+            let mut reply = message.call(usec)?;
 
-        let object_path_cstr = reply
-            .iter()?
-            .read_basic_raw(b'c', |raw: *const libc::c_char| unsafe {
-                std::ffi::CStr::from_ptr(raw)
-            })?
-            .unwrap();
-        self.jobs
-            .insert(std::ffi::CString::from(object_path_cstr), f);
+            let object_path_cstr = reply
+                .iter()?
+                .read_basic_raw(b'c', |raw: *const libc::c_char| {
+                    std::ffi::CStr::from_ptr(raw)
+                })?
+                .unwrap();
+            self.jobs
+                .insert(std::ffi::CString::from(object_path_cstr), f);
 
-        Ok(())
+            Ok(())
+        }
     }
 
-    fn new_method_call(&self, member: &str) -> std::io::Result<Message> {
+    fn new_method_call(&mut self, member: &str) -> std::io::Result<Message> {
         self.bus.new_method_call(
             BusName::from_bytes(DESTINATION.as_bytes()).expect("systemd BusName parse failure"),
             ObjectPath::from_bytes(PATH.as_bytes()).expect("systemd ObjectPath parse failure"),
