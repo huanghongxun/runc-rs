@@ -85,7 +85,9 @@ pub enum Error {
 
     #[error("an error occurred when mounting {path:?}")]
     Mount {
-        path: std::path::PathBuf,
+        source: Option<std::path::PathBuf>,
+        destination: std::path::PathBuf,
+        kind: String,
         error: nix::Error,
     },
     #[error("an error occured when setting permission of mountpoint {path:?}")]
