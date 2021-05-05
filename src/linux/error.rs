@@ -56,6 +56,9 @@ pub enum Error {
     #[error("invalid device mode")]
     InvalidDeviceMode { path: std::path::PathBuf, mode: u32 },
 
+    #[error("invalid capability name")]
+    InvalidCapability { capability: String },
+
     #[error("invalid seccomp action {action:}")]
     InvalidSeccompAction { action: String },
     #[error("invalid seccomp op {op:}")]
@@ -143,4 +146,7 @@ pub enum Error {
         command: String,
         error: std::string::FromUtf8Error,
     },
+
+    #[error("an error occurred when applying capabilities")]
+    CapabilityError(std::io::Error),
 }

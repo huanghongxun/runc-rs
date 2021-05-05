@@ -23,3 +23,4 @@ scopeguard = "1.1.0"
 caps = "0.5.1"
 seccomp-sys = "0.1.1"
 systemd = { git = "https://github.com/huanghongxun/rust-systemd" }
+capabilities = "0.3"

@@ -29,6 +29,8 @@ pub struct LinuxProcess {
 
     pid: Option<Pid>,
 
+    rootless_euid: bool,
+
     cgroup: Option<cgroups_rs::Cgroup>,
 
     status: ProcessStatus,

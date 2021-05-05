@@ -17,9 +17,6 @@ pub struct Config {
     pub root_propagation: u64,
 
     #[serde(default)]
-    pub rootless_euid: bool,
-
-    #[serde(default)]
     pub mounts: Vec<Mount>,
 
     #[serde(default)]
@@ -40,7 +37,7 @@ pub struct Process {
     #[serde(default)]
     pub cwd: Option<PathBuf>,
 
-    pub capabilities: Capabilities,
+    pub capabilities: Option<Capabilities>,
 
     #[serde(default)]
     pub rlimits: Vec<Rlimit>,

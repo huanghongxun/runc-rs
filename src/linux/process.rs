@@ -77,6 +77,52 @@ fn fix_stdio_permissions(user: &User) -> Result<()> {
     Ok(())
 }
 
+fn map_capability(cap_name: &str) -> Result<capabilities::Capability> {
+    match cap_name {
+        "CAP_CHOWN" => Ok(capabilities::Capability::CAP_CHOWN),
+        "CAP_DAC_OVERRIDE" => Ok(capabilities::Capability::CAP_DAC_OVERRIDE),
+        "CAP_DAC_READ_SEARCH" => Ok(capabilities::Capability::CAP_DAC_READ_SEARCH),
+        "CAP_FOWNER" => Ok(capabilities::Capability::CAP_FOWNER),
+        "CAP_FSETID" => Ok(capabilities::Capability::CAP_FSETID),
+        "CAP_KILL" => Ok(capabilities::Capability::CAP_KILL),
+        "CAP_SETGID" => Ok(capabilities::Capability::CAP_SETGID),
+        "CAP_SETUID" => Ok(capabilities::Capability::CAP_SETUID),
+        "CAP_SETPCAP" => Ok(capabilities::Capability::CAP_SETPCAP),
+        "CAP_LINUX_IMMUTABLE" => Ok(capabilities::Capability::CAP_LINUX_IMMUTABLE),
+        "CAP_NET_BIND_SERVICE" => Ok(capabilities::Capability::CAP_NET_BIND_SERVICE),
+        "CAP_NET_BROADCAST" => Ok(capabilities::Capability::CAP_NET_BROADCAST),
+        "CAP_NET_ADMIN" => Ok(capabilities::Capability::CAP_NET_ADMIN),
+        "CAP_NET_RAW" => Ok(capabilities::Capability::CAP_NET_RAW),
+        "CAP_IPC_LOCK" => Ok(capabilities::Capability::CAP_IPC_LOCK),
+        "CAP_IPC_OWNER" => Ok(capabilities::Capability::CAP_IPC_OWNER),
+        "CAP_SYS_MODULE" => Ok(capabilities::Capability::CAP_SYS_MODULE),
+        "CAP_SYS_RAWIO" => Ok(capabilities::Capability::CAP_SYS_RAWIO),
+        "CAP_SYS_CHROOT" => Ok(capabilities::Capability::CAP_SYS_CHROOT),
+        "CAP_SYS_PTRACE" => Ok(capabilities::Capability::CAP_SYS_PTRACE),
+        "CAP_SYS_PACCT" => Ok(capabilities::Capability::CAP_SYS_PACCT),
+        "CAP_SYS_ADMIN" => Ok(capabilities::Capability::CAP_SYS_ADMIN),
+        "CAP_SYS_BOOT" => Ok(capabilities::Capability::CAP_SYS_BOOT),
+        "CAP_SYS_NICE" => Ok(capabilities::Capability::CAP_SYS_NICE),
+        "CAP_SYS_RESOURCE" => Ok(capabilities::Capability::CAP_SYS_RESOURCE),
+        "CAP_SYS_TIME" => Ok(capabilities::Capability::CAP_SYS_TIME),
+        "CAP_SYS_TTY_CONFIG" => Ok(capabilities::Capability::CAP_SYS_TTY_CONFIG),
+        "CAP_MKNOD" => Ok(capabilities::Capability::CAP_MKNOD),
+        "CAP_LEASE" => Ok(capabilities::Capability::CAP_LEASE),
+        "CAP_AUDIT_WRITE" => Ok(capabilities::Capability::CAP_AUDIT_WRITE),
+        "CAP_AUDIT_CONTROL" => Ok(capabilities::Capability::CAP_AUDIT_CONTROL),
+        "CAP_SETFCAP" => Ok(capabilities::Capability::CAP_SETFCAP),
+        "CAP_MAC_OVERRIDE" => Ok(capabilities::Capability::CAP_MAC_OVERRIDE),
+        "CAP_MAC_ADMIN" => Ok(capabilities::Capability::CAP_MAC_ADMIN),
+        "CAP_SYSLOG" => Ok(capabilities::Capability::CAP_SYSLOG),
+        "CAP_WAKE_ALARM" => Ok(capabilities::Capability::CAP_WAKE_ALARM),
+        "CAP_BLOCK_SUSPEND" => Ok(capabilities::Capability::CAP_BLOCK_SUSPEND),
+        "CAP_AUDIT_READ" => Ok(capabilities::Capability::CAP_AUDIT_READ),
+        _ => Err(error::Error::InvalidCapability {
+            capability: cap_name.into(),
+        }),
+    }
+}
+
 impl LinuxProcess {
     pub fn new(name: String, config: config::Config, command: Vec<String>) -> LinuxProcess {
         LinuxProcess {
@@ -84,6 +130,7 @@ impl LinuxProcess {
             config,
             command,
             pid: None,
+            rootless_euid: getegid() != Gid::from_raw(0),
             cgroup: None,
             status: ProcessStatus::Ready,
         }
@@ -975,11 +1022,44 @@ impl LinuxProcess {
         Ok(())
     }
 
+    fn convert_capabilities(capabilities: &Vec<String>) -> Result<Vec<capabilities::Capability>> {
+        let mut result = Vec::new();
+        for cap in capabilities {
+            result.push(map_capability(cap)?);
+        }
+        return Ok(result);
+    }
+
+    fn setup_capabilities(&self) -> Result<()> {
+        use capabilities::*;
+        let mut cap = Capabilities::new()?;
+
+        if let Some(allowed_capabilities) = &self.config.process.capabilities {
+            let effective: Vec<Capability> =
+                LinuxProcess::convert_capabilities(&allowed_capabilities.effective)?;
+            cap.update(&effective, Flag::Effective, true);
+
+            let permitted: Vec<Capability> =
+                LinuxProcess::convert_capabilities(&allowed_capabilities.permitted)?;
+            cap.update(&permitted, Flag::Permitted, true);
+
+            let inheritable: Vec<Capability> =
+                LinuxProcess::convert_capabilities(&allowed_capabilities.inheritable)?;
+            cap.update(&inheritable, Flag::Inheritable, true);
+
+            if let Err(err) = cap.apply() {
+                return Err(error::Error::CapabilityError(err));
+            }
+        }
+
+        Ok(())
+    }
+
     fn finalize_namespace(&self) -> Result<()> {
         // Close all fds other than stdin, stdout, stderr.
         close_on_exec_from(3)?;
 
-        // TODO: set capabilities
+        self.setup_capabilities()?;
 
         // preserve existing capabilities while we change users.
         // prctl::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0)?;
@@ -1008,7 +1088,7 @@ impl LinuxProcess {
 
         fix_stdio_permissions(&user)?;
 
-        let allow_sgroups = !self.config.rootless_euid
+        let allow_sgroups = !self.rootless_euid
             && std::fs::read_to_string("/proc/self/setgroups")?.trim() != "deny";
         if allow_sgroups {
             // TODO: read additional groups.
