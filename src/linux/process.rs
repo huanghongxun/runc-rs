@@ -770,8 +770,14 @@ impl LinuxProcess {
                     })
                     .collect();
 
-            let cgroup =
-                cgroups_rs::Cgroup::new_with_relative_paths(hier, &self.name, relative_paths);
+            let cgroup = cgroups_rs::Cgroup::new_with_relative_paths(
+                hier,
+                match &self.config.linux.cgroups_path {
+                    Some(path) => path,
+                    None => &self.name,
+                },
+                relative_paths,
+            );
             let mut resources = cgroups_rs::Resources::default();
 
             if let Some(memory) = &config_resources.memory {

@@ -127,6 +127,9 @@ pub struct Linux {
     #[serde(default)]
     pub readonly_paths: Vec<PathBuf>,
 
+    #[serde(alias = "cgroupsPath")]
+    pub cgroups_path: Option<String>,
+
     #[serde(default)]
     pub resources: Option<Resources>,
 }
