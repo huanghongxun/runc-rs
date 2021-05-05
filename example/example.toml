@@ -16,11 +16,6 @@ hostname = "judge"
     gid = 0
 
     [process.capabilities]
-    bounding = [
-		"CAP_AUDIT_WRITE",
-		"CAP_KILL",
-	]
-
     effective = [
 		"CAP_AUDIT_WRITE",
 		"CAP_KILL",
@@ -32,11 +27,6 @@ hostname = "judge"
 	]
 
     permitted = [
-		"CAP_AUDIT_WRITE",
-		"CAP_KILL",
-	]
-
-    ambient = [
 		"CAP_AUDIT_WRITE",
 		"CAP_KILL",
 	]

@@ -10,12 +10,14 @@ extern crate scopeguard;
 use clap::{App, Arg};
 
 fn parse_config(config_str: &str) -> config::Config {
-    if let Ok(x) = toml::from_str(config_str) {
-        return x;
-    } else if let Ok(x) = serde_json::from_str(config_str) {
-        return x;
-    } else {
-        panic!("Configuration unparsable");
+    match toml::from_str(config_str) {
+        Ok(x) => return x,
+        Err(err1) => match serde_json::from_str(config_str) {
+            Ok(x) => return x,
+            Err(err2) => {
+                panic!("Configuration unparsable\ntoml:{}\njson:{}", err1, err2);
+            }
+        },
     }
 }
 

@@ -240,7 +240,7 @@ pub struct MemoryResources {
     pub swappiness: Option<u64>,
 
     #[serde(default, alias = "disableOOMKiller")]
-    pub disable_oom_killer: u64,
+    pub disable_oom_killer: bool,
 
     #[serde(default, alias = "useHierarchy")]
     pub use_hierarchy: bool,
