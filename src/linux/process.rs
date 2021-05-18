@@ -9,12 +9,15 @@ use crate::process::ProcessStatus;
 use cgroups_rs::Controller;
 use nix::mount::*;
 use nix::sys::signal::{kill, Signal};
+use nix::sys::socket::*;
 use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::*;
 use std::convert::TryFrom;
 use std::ffi::CString;
 use std::io;
+use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
+use std::os::unix::io::FromRawFd;
 use std::path::{Path, PathBuf};
 
 fn format_mount_label(src: &str, mount_label: &str) -> String {
@@ -123,6 +126,58 @@ fn map_capability(cap_name: &str) -> Result<capabilities::Capability> {
     }
 }
 
+macro_rules! system {
+    ($p:expr) => {{
+        use nix::NixPath;
+        $p.with_nix_path(|t| unsafe {
+            libc::system(t.as_ptr());
+        });
+    }};
+}
+
+fn notify_sync_socket(f: &mut std::fs::File, stage: &str) -> Result<()> {
+    if let Err(err) = f.write(&vec![0; 1]) {
+        return Err(error::Error::WriteSocket {
+            stage: stage.into(),
+            reason: "Read status from sync socket".into(),
+            error: Some(err),
+        });
+    }
+
+    Ok(())
+}
+
+fn expect_success_from_sync_socket(f: &mut std::fs::File, stage: &str) -> Result<()> {
+    let mut buf = vec![0; 1];
+    if let Err(err) = f.read_exact(&mut buf) {
+        return Err(error::Error::WaitForSocket {
+            stage: stage.into(),
+            reason: "Read status from sync socket".into(),
+            error: Some(err),
+        });
+    }
+
+    if buf[0] == 0 {
+        return Ok(());
+    }
+
+    let mut strbuf = vec![0; buf[0].into()];
+    if let Err(err) = f.read_exact(&mut strbuf) {
+        return Err(error::Error::WaitForSocket {
+            stage: stage.into(),
+            reason: "Read status from sync socket".into(),
+            error: Some(err),
+        });
+    }
+
+    Err(error::Error::WaitForSocket {
+        stage: stage.into(),
+        reason: String::from_utf8(strbuf)
+            .expect("Read from socket, but reason string does not fulfill UTF-8 standard"),
+        error: None,
+    })
+}
+
 impl LinuxProcess {
     pub fn new(name: String, config: config::Config, command: Vec<String>) -> LinuxProcess {
         LinuxProcess {
@@ -141,7 +196,17 @@ impl LinuxProcess {
     }
 
     pub fn start(&mut self) -> Result<()> {
-        self.setup_ns()?;
+        let (sync_socket_host_fd, sync_socket_container_fd) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )?;
+        let mut sync_socket_host = unsafe { std::fs::File::from_raw_fd(sync_socket_host_fd) };
+        let mut sync_socket_container =
+            unsafe { std::fs::File::from_raw_fd(sync_socket_container_fd) };
+
+        prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0)?;
 
         // setup cgroups in parent, so we can collect information from cgroup statistics.
         self.cgroup = self.setup_cgroups()?;
@@ -149,16 +214,106 @@ impl LinuxProcess {
         unsafe {
             match fork()? {
                 ForkResult::Parent { child, .. } => {
-                    self.pid = Some(child);
                     self.status = ProcessStatus::Running;
+
+                    if self.has_ns(Namespace::User)? {
+                        // Wait for user namespace creation in child process
+                        expect_success_from_sync_socket(
+                            &mut sync_socket_host,
+                            "Wait for userns creation",
+                        )?;
+
+                        self.setup_user_ns(child)?;
+
+                        notify_sync_socket(
+                            &mut sync_socket_host,
+                            "Notify user namespace initialization",
+                        )?;
+                    }
+
+                    // Wait for grandchild process creation
+                    expect_success_from_sync_socket(
+                        &mut sync_socket_host,
+                        "Wait for grandchild process creation",
+                    )?;
+
+                    let mut grandchild_buf = [0; 4];
+                    if let Err(err) = sync_socket_host.read_exact(&mut grandchild_buf) {
+                        return Err(error::Error::WaitForSocket {
+                            stage: "Read grandchild pid from sync socket".into(),
+                            reason: "Read grandchild pid from sync socket".into(),
+                            error: Some(err),
+                        });
+                    }
+
+                    let grandchild_pid = Pid::from_raw(i32::from_ne_bytes(grandchild_buf));
+                    self.pid = Some(grandchild_pid);
+
+                    notify_sync_socket(&mut sync_socket_host, "Notify grandchild pid retriving")?;
+
+                    waitpid(child, None);
+
+                    // Wait for execvp
+                    expect_success_from_sync_socket(&mut sync_socket_host, "Wait for execvp")?;
+
+                    // We must postpone cgroup setup as close to execvp as possible, so cpu time
+                    // will be more accurate.
+                    // enters cgroup in child, to make sure the operation is done before execvp.
+                    self.enter_cgroups(grandchild_pid)?;
+
                     Ok(())
                 }
-                ForkResult::Child => self.child(),
+                ForkResult::Child => {
+                    if self.has_ns(Namespace::User)? {
+                        self.unshare_user_ns()?;
+
+                        // notify parent: Wait for userns creation
+                        notify_sync_socket(&mut sync_socket_container, "Notify userns creation")?;
+
+                        // Wait for userns initialization
+                        expect_success_from_sync_socket(
+                            &mut sync_socket_container,
+                            "Wait for user namespace initialization",
+                        )?;
+                    }
+
+                    self.setup_ns()?;
+
+                    match fork()? {
+                        ForkResult::Parent { child, .. } => {
+                            // Child process does only setup namespaces,
+                            // Pid and time namespace apply for children.
+
+                            // notify parent: Wait for grandchild process creation.
+                            if let Err(err) = sync_socket_container.write(&vec![0; 1]) {
+                                kill(child, Signal::SIGKILL);
+                            }
+
+                            // notify parent about grandchild pid.
+                            if let Err(err) =
+                                sync_socket_container.write(&child.as_raw().to_ne_bytes())
+                            {
+                                kill(child, Signal::SIGKILL);
+                            }
+                            std::process::exit(0);
+                        }
+                        ForkResult::Child => {
+                            expect_success_from_sync_socket(
+                                &mut sync_socket_container,
+                                "Wait for parent grandchild pid retriving",
+                            )?;
+
+                            self.child(&mut sync_socket_container).unwrap();
+                        }
+                    }
+
+                    Ok(())
+                }
             }
         }
     }
 
-    fn child(&self) -> Result<()> {
+    fn child(&self, sync_socket_container: &mut std::fs::File) -> Result<()> {
         let path = CString::new(self.command[0].as_str()).expect("CString::new failed");
         let cstr_args: Vec<CString> = self
             .command
@@ -199,10 +354,8 @@ impl LinuxProcess {
 
         self.finalize_namespace()?;
 
-        // We must postpone cgroup setup as close to execvp as possible, so cpu time
-        // will be more accurate.
-        // enters cgroup in child, to make sure the operation is done before execvp.
-        self.enter_cgroups()?;
+        // notify parent: Wait for execvp
+        notify_sync_socket(sync_socket_container, "Notify execvp")?;
 
         // With no new privileges, we must postpone seccomp as close to
         // execvp as possible, so as few syscalls take place afterward.
@@ -254,18 +407,25 @@ impl LinuxProcess {
             _ => {}
         }
 
+        let pid = self.pid.unwrap();
+
         loop {
-            match waitpid(self.pid.unwrap(), None)? {
+            match waitpid(Pid::from_raw(-1), None)? {
                 WaitStatus::PtraceEvent(..) => {}
                 WaitStatus::PtraceSyscall(..) => {}
                 WaitStatus::Exited(x, exitcode) => {
-                    assert_eq!(x, self.pid.unwrap());
+                    if x != pid {
+                        continue;
+                    }
 
                     self.status = ProcessStatus::Exited(exitcode as u8);
                     return Ok(self.status);
                 }
                 WaitStatus::Signaled(x, signal, _) => {
-                    assert_eq!(x, self.pid.unwrap());
+                    if x != pid {
+                        continue;
+                    }
+
                     self.status = ProcessStatus::Signaled(signal);
                     return Ok(self.status);
                 }
@@ -680,7 +840,24 @@ impl LinuxProcess {
         std::fs::write(path.as_ref(), maplines.join("\n"))
     }
 
-    fn setup_user_ns(&self) -> Result<()> {
+    fn has_ns(&self, namespace: Namespace) -> Result<bool> {
+        for namespace_config in self.config.linux.namespaces.iter() {
+            let ns = match Namespace::try_from(namespace_config.kind.as_str()) {
+                Ok(ns) => ns,
+                Err(_) => {
+                    return Err(error::Error::InvalidNamespace(
+                        namespace_config.kind.clone(),
+                    ))
+                }
+            };
+            if ns == namespace {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn unshare_user_ns(&self) -> Result<()> {
         for namespace in self.config.linux.namespaces.iter() {
             let ns = match Namespace::try_from(namespace.kind.as_str()) {
                 Ok(ns) => ns,
@@ -694,28 +871,43 @@ impl LinuxProcess {
                         error: err,
                     });
                 }
+            }
+        }
 
+        Ok(())
+    }
+
+    fn setup_user_ns(&self, pid: Pid) -> Result<()> {
+        for namespace in self.config.linux.namespaces.iter() {
+            let ns = match Namespace::try_from(namespace.kind.as_str()) {
+                Ok(ns) => ns,
+                Err(_) => return Err(error::Error::InvalidNamespace(namespace.kind.clone())),
+            };
+            if ns == namespace::Namespace::User {
                 if namespace.path.is_none() {
+                    // since Linux 3.19, unprivilegd writing of /proc/self/gid_map has been disabled
+                    // unless /proc/self/setgroups is written first to permanently disable the
+                    // ability to call set groups in that user namespace.
+                    let setgroups: PathBuf = format!("/proc/{}/setgroups", pid.as_raw()).into();
+                    if setgroups.exists() {
+                        if let Err(err) = std::fs::write(&setgroups, "deny") {
+                            return Err(error::Error::DenySetgroups(err));
+                        }
+                    }
+
                     // we only update uid/gid mappings when we are not joining an existing user namespace.
-                    if let Err(err) =
-                        self.update_map("/proc/self/uid_map", &self.config.linux.uid_mappings)
-                    {
+                    if let Err(err) = self.update_map(
+                        format!("/proc/{}/uid_map", pid.as_raw()),
+                        &self.config.linux.uid_mappings,
+                    ) {
                         return Err(error::Error::UpdateUidMapping(err));
                     }
 
                     if !self.config.linux.gid_mappings.is_empty() {
-                        // since Linux 3.19, unprivilegd writing of /proc/self/gid_map has been disabled
-                        // uinless /proc/self/setgroups is written first to permanently disable the
-                        // ability to call set groups in that user namespace.
-                        let setgroups: PathBuf = "/proc/self/setgroups".into();
-                        if setgroups.exists() {
-                            if let Err(err) = std::fs::write(&setgroups, "deny") {
-                                return Err(error::Error::DenySetgroups(err));
-                            }
-                        }
-                        if let Err(err) =
-                            self.update_map("/proc/self/gid_map", &self.config.linux.gid_mappings)
-                        {
+                        if let Err(err) = self.update_map(
+                            format!("/proc/{}/gid_map", pid.as_raw()),
+                            &self.config.linux.gid_mappings,
+                        ) {
                             return Err(error::Error::UpdateGidMapping(err));
                         }
                     }
@@ -731,7 +923,6 @@ impl LinuxProcess {
     /// Please note that unshare and setns are called in parent process, not child process.
     /// Because PID namespace only takes effect on child processes, not the calling process.
     fn setup_ns(&self) -> Result<()> {
-        self.setup_user_ns()?;
         for namespace in self.config.linux.namespaces.iter() {
             let ns = match Namespace::try_from(namespace.kind.as_str()) {
                 Ok(ns) => ns,
@@ -812,6 +1003,11 @@ impl LinuxProcess {
                     controller.apply(&resources)?;
                 }
             }
+            if let Some(controller) =
+                cgroup.controller_of::<cgroups_rs::cpuacct::CpuAcctController>()
+            {
+                controller.apply(&resources)?;
+            }
             if !config_resources.devices.is_empty() {
                 resources.devices.devices = config_resources
                     .devices
@@ -851,37 +1047,42 @@ impl LinuxProcess {
         }
     }
 
-    fn enter_cgroups(&self) -> Result<()> {
-        let pid = (nix::unistd::gettid().as_raw() as u64).into();
+    fn enter_cgroups(&self, pid: Pid) -> Result<()> {
+        let cgpid = (pid.as_raw() as u64).into();
         if let Some(cgroup) = &self.cgroup {
             if let Some(config_resources) = &self.config.linux.resources {
                 if let Some(_) = &config_resources.memory {
                     if let Some(controller) =
                         cgroup.controller_of::<cgroups_rs::memory::MemController>()
                     {
-                        controller.add_task(&pid)?;
+                        controller.add_task(&cgpid)?;
                     }
                 }
                 if let Some(_) = &config_resources.cpu {
                     if let Some(controller) =
                         cgroup.controller_of::<cgroups_rs::cpu::CpuController>()
                     {
-                        controller.add_task(&pid)?;
+                        controller.add_task(&cgpid)?;
                     }
                 }
                 if let Some(_) = &config_resources.pids {
                     if let Some(controller) =
                         cgroup.controller_of::<cgroups_rs::pid::PidController>()
                     {
-                        controller.add_task(&pid)?;
+                        controller.add_task(&cgpid)?;
                     }
                 }
                 if !config_resources.devices.is_empty() {
                     if let Some(controller) =
                         cgroup.controller_of::<cgroups_rs::devices::DevicesController>()
                     {
-                        controller.add_task(&pid)?;
+                        controller.add_task(&cgpid)?;
                     }
+                }
+                if let Some(controller) =
+                    cgroup.controller_of::<cgroups_rs::cpuacct::CpuAcctController>()
+                {
+                    controller.add_task(&cgpid)?;
                 }
             }
         }

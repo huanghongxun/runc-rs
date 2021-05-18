@@ -83,9 +83,9 @@ pub enum Error {
         error: std::io::Error,
     },
 
-    #[error("an error occurred when mounting {path:?}")]
+    #[error("an error occurred when mounting {destination:?}")]
     Mount {
-        source: Option<std::path::PathBuf>,
+        // source: Option<std::path::PathBuf>,
         destination: std::path::PathBuf,
         kind: String,
         error: nix::Error,
@@ -151,6 +151,20 @@ pub enum Error {
 
     #[error("an error occurred when applying capabilities")]
     CapabilityError(std::io::Error),
+
+    #[error("an error occurred when waiting for host/container operation")]
+    WaitForSocket {
+        stage: String,
+        reason: String,
+        error: Option<std::io::Error>,
+    },
+
+    #[error("an error occurred when notifying host/container")]
+    WriteSocket {
+        stage: String,
+        reason: String,
+        error: Option<std::io::Error>,
+    },
 
     #[error("an error occurred when writing to out-meta file")]
     WriteOutMeta { path: String, error: std::io::Error },
