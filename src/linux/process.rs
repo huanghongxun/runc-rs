@@ -261,6 +261,8 @@ impl LinuxProcess {
                     // enters cgroup in child, to make sure the operation is done before execvp.
                     self.enter_cgroups(grandchild_pid)?;
 
+                    notify_sync_socket(&mut sync_socket_host, "Notify cgroup")?;
+
                     Ok(())
                 }
                 ForkResult::Child => {
@@ -356,6 +358,7 @@ impl LinuxProcess {
 
         // notify parent: Wait for execvp
         notify_sync_socket(sync_socket_container, "Notify execvp")?;
+        expect_success_from_sync_socket(sync_socket_container, "Wait for cgroup")?;
 
         // With no new privileges, we must postpone seccomp as close to
         // execvp as possible, so as few syscalls take place afterward.
