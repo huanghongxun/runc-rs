@@ -38,6 +38,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         )
         .arg(Arg::with_name("file").short("f").long("file").takes_value(true).help("a toml file that guides container configuration"))
         .arg(Arg::with_name("config").short("c").long("config").takes_value(true).help("pass toml configuration in command line"))
+        .arg(Arg::with_name("out-meta").long("out-meta").takes_value(true).help("write runguard monitor results (run time, exitcode, memory usage, ...) to file"))
         .arg(Arg::with_name("commands").required(true).min_values(1))
         .get_matches();
 
@@ -54,10 +55,16 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         unreachable!()
     };
 
+    let out_meta = matches.value_of("out-meta").map(|s| s.to_string());
+
     let config: config::Config = parse_config(&config_str);
 
     if cfg!(target_os = "linux") {
-        linux::run(&config, matches.values_of("commands").unwrap().collect())?;
+        linux::run(
+            &config,
+            matches.values_of("commands").unwrap().collect(),
+            out_meta,
+        )?;
         Ok(())
     } else {
         eprintln!("Unsupported operating system");

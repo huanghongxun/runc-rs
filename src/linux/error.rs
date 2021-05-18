@@ -151,4 +151,7 @@ pub enum Error {
 
     #[error("an error occurred when applying capabilities")]
     CapabilityError(std::io::Error),
+
+    #[error("an error occurred when writing to out-meta file")]
+    WriteOutMeta { path: String, error: std::io::Error },
 }

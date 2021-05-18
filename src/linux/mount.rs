@@ -118,7 +118,7 @@ impl Mount {
             Some(selinux::format_mount_label(self.data.join(",").as_str(), mount_label).as_str()),
         ) {
             return Err(error::Error::Mount {
-                source: self.source.clone(),
+                // source: self.source.clone(),
                 destination: self.destination.clone(),
                 kind: self.device.clone(),
                 error: err,

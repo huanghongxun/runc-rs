@@ -167,3 +167,5 @@ readonly = true
         [linux.resources.memory]
         limit = 134217728
         reservation = 134217728
+
+        [linux.resources.cpu]
