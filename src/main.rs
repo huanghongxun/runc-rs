@@ -39,6 +39,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .arg(Arg::with_name("file").short("f").long("file").takes_value(true).help("a toml file that guides container configuration"))
         .arg(Arg::with_name("config").short("c").long("config").takes_value(true).help("pass toml configuration in command line"))
         .arg(Arg::with_name("out-meta").long("out-meta").takes_value(true).help("write runguard monitor results (run time, exitcode, memory usage, ...) to file"))
+        .arg(Arg::with_name("map-fd").long("map-fd").multiple(true).takes_value(true).value_names(&["from", "to"]).validator(|p| match p.parse::<i32>() {
+            Err(_) => Err(String::from("file descriptors are number")),
+            Ok(_) => Ok(()),
+        }).help("map specific file descriptor"))
+        .arg(Arg::with_name("preserve-fd").long("preserve-fd").multiple(true).takes_value(true).validator(|p| match p.parse::<i32>() {
+            Err(_) => Err(String::from("file descriptors are number")),
+            Ok(_) => Ok(()),
+        }).help("preserve opened file descriptor to application in container"))
         .arg(Arg::with_name("commands").required(true).min_values(1))
         .get_matches();
 
@@ -55,6 +63,27 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         unreachable!()
     };
 
+    let mapped_fds = if let Some(mapfd) = matches.values_of("map-fd") {
+        mapfd
+            .collect::<Vec<&str>>()
+            .chunks(2)
+            .map(|arr| {
+                (
+                    arr[0].parse::<i32>().expect("fd must be number"),
+                    arr[1].parse::<i32>().expect("fd must be number"),
+                )
+            })
+            .collect::<Vec<(i32, i32)>>()
+    } else {
+        vec![]
+    };
+
+    let preserved_fds = if let Some(preservefd) = matches.values_of("preserve-fd") {
+        preservefd.map(|p| p.parse::<i32>().unwrap()).collect()
+    } else {
+        vec![]
+    };
+
     let out_meta = matches.value_of("out-meta").map(|s| s.to_string());
 
     let config: config::Config = parse_config(&config_str);
@@ -64,6 +93,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             &config,
             matches.values_of("commands").unwrap().collect(),
             out_meta,
+            mapped_fds,
+            preserved_fds,
         )?;
         Ok(())
     } else {

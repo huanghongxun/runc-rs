@@ -12,6 +12,7 @@ use nix::sys::signal::{kill, Signal};
 use nix::sys::socket::*;
 use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::*;
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::ffi::CString;
 use std::io;
@@ -32,7 +33,16 @@ fn format_mount_label(src: &str, mount_label: &str) -> String {
     }
 }
 
-fn close_on_exec_from(start_fd: i32) -> Result<()> {
+fn close_on_exec_from(
+    start_fd: i32,
+    mapped_fds: &Vec<(i32, i32)>,
+    preserved_fds: &Vec<i32>,
+) -> Result<()> {
+    let preserve_fds = mapped_fds
+        .iter()
+        .map(|p| p.1)
+        .chain(preserved_fds.iter().map(|p| *p))
+        .collect::<HashSet<i32>>();
     for dir in std::fs::read_dir("/proc/self/fd")? {
         let ok_dir = dir?;
         if let Some(file_name) = ok_dir.file_name().to_str() {
@@ -41,11 +51,15 @@ fn close_on_exec_from(start_fd: i32) -> Result<()> {
                     continue;
                 }
 
+                if preserve_fds.contains(&fd) {
+                    continue;
+                }
+
                 // Ignores errors from fcntl because some fds may be already closed.
-                nix::fcntl::fcntl(
+                let _ = nix::fcntl::fcntl(
                     fd,
                     nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::FD_CLOEXEC),
-                )?;
+                );
             }
         }
     }
@@ -126,15 +140,6 @@ fn map_capability(cap_name: &str) -> Result<capabilities::Capability> {
     }
 }
 
-macro_rules! system {
-    ($p:expr) => {{
-        use nix::NixPath;
-        $p.with_nix_path(|t| unsafe {
-            libc::system(t.as_ptr());
-        });
-    }};
-}
-
 fn notify_sync_socket(f: &mut std::fs::File, stage: &str) -> Result<()> {
     if let Err(err) = f.write(&vec![0; 1]) {
         return Err(error::Error::WriteSocket {
@@ -179,11 +184,19 @@ fn expect_success_from_sync_socket(f: &mut std::fs::File, stage: &str) -> Result
 }
 
 impl LinuxProcess {
-    pub fn new(name: String, config: config::Config, command: Vec<String>) -> LinuxProcess {
+    pub fn new(
+        name: String,
+        config: config::Config,
+        command: Vec<String>,
+        mapped_fds: Vec<(i32, i32)>,
+        preserved_fds: Vec<i32>,
+    ) -> LinuxProcess {
         LinuxProcess {
             name,
             config,
             command,
+            mapped_fds,
+            preserved_fds,
             pid: None,
             rootless_euid: getegid() != Gid::from_raw(0),
             cgroup: None,
@@ -1266,8 +1279,18 @@ impl LinuxProcess {
     }
 
     fn finalize_namespace(&self) -> Result<()> {
+        for &(from, to) in self.mapped_fds.iter() {
+            if let Err(err) = nix::unistd::dup2(from, to) {
+                return Err(error::Error::MappingFileDescriptor {
+                    from,
+                    to,
+                    error: err,
+                });
+            }
+        }
+
         // Close all fds other than stdin, stdout, stderr.
-        close_on_exec_from(3)?;
+        close_on_exec_from(3, &self.mapped_fds, &self.preserved_fds)?;
 
         self.setup_capabilities()?;
 

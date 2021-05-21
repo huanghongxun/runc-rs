@@ -27,6 +27,8 @@ pub struct LinuxProcess {
     name: String,
     config: config::Config,
     command: Vec<String>,
+    mapped_fds: Vec<(i32, i32)>,
+    preserved_fds: Vec<i32>,
 
     pid: Option<Pid>,
 
@@ -37,12 +39,24 @@ pub struct LinuxProcess {
     status: ProcessStatus,
 }
 
-pub fn run(config: &config::Config, commands: Vec<&str>, out_meta: Option<String>) -> Result<()> {
-    run_impl(config, commands, out_meta)?;
+pub fn run(
+    config: &config::Config,
+    commands: Vec<&str>,
+    out_meta: Option<String>,
+    mapped_fds: Vec<(i32, i32)>,
+    preserved_fds: Vec<i32>,
+) -> Result<()> {
+    run_impl(config, commands, out_meta, mapped_fds, preserved_fds)?;
     Ok(())
 }
 
-fn run_impl(config: &config::Config, commands: Vec<&str>, out_meta: Option<String>) -> Result<()> {
+fn run_impl(
+    config: &config::Config,
+    commands: Vec<&str>,
+    out_meta: Option<String>,
+    mapped_fds: Vec<(i32, i32)>,
+    preserved_fds: Vec<i32>,
+) -> Result<()> {
     let mut process = LinuxProcess::new(
         format!(
             "runc/{}_{}",
@@ -54,6 +68,8 @@ fn run_impl(config: &config::Config, commands: Vec<&str>, out_meta: Option<Strin
         ),
         config.clone(),
         commands.iter().map(|s| s.to_string()).collect(),
+        mapped_fds,
+        preserved_fds,
     );
     process.start()?;
 

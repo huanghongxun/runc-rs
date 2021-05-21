@@ -168,4 +168,11 @@ pub enum Error {
 
     #[error("an error occurred when writing to out-meta file")]
     WriteOutMeta { path: String, error: std::io::Error },
+
+    #[error("an error occurred when mapping file descriptor from {from:} to {to:}")]
+    MappingFileDescriptor {
+        from: i32,
+        to: i32,
+        error: nix::Error,
+    },
 }
